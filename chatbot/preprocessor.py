@@ -90,7 +90,7 @@ class Corpus():
             if len(sentence1) <= self.max_length and len(sentence2) <= self.max_length:
                 tokenized_inputs.append(sentence1)
                 tokenized_outputs.append(sentence2)
-        self.answers = tf.keras.preprocessing.sequence.pad_sequences(
+        self.questions = tf.keras.preprocessing.sequence.pad_sequences(
             tokenized_inputs, maxlen=self.max_length, padding='post')
         self.answers = tf.keras.preprocessing.sequence.pad_sequences(
             tokenized_outputs, maxlen=self.max_length, padding='post')
