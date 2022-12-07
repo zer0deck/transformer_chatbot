@@ -21,7 +21,7 @@ class Corpus():
     For example,
     >>> corpus = Corpus(lang='ru', max_length=20, corpus=corpus)
     >>> print(Corpus)
-    >>> is_cuda_gpu_min_3 = tf.test.is_gpu_available(True, (3,0))
+    >>> is_cuda_gpu_min_3 = tf.test.is_gpu_available(True, (3,0))89-
 
     Args:
         lang: (optional string [default 'en-us']) set the lang; list of available languages you can find in guide.
@@ -43,13 +43,13 @@ class Corpus():
     max_length: int = field(default=40, init=True, repr=True)
     batch_size: int = field(default=64, init=True, repr=True)
     buffer_size: int = field(default=20000, init=True, repr=True)
-    start_token: int = field(default=0, init=False, repr=True)
-    end_token: int = field(default=0, init=False, repr=True)
-    vocab_size: int = field(default=0, init=False, repr=True)
+    _start_token: int = field(default=0, init=False, repr=True)
+    _end_token: int = field(default=0, init=False, repr=True)
+    _vocab_size: int = field(default=0, init=False, repr=True)
     corpus: pd.DataFrame = field(default=pd.DataFrame, init=True, repr=False)
-    questions: list = field(default_factory=list, init=False, repr=False)
-    answers: list = field(default_factory=list, init=False, repr=False)
-    tokenizer: tfds.deprecated.text.SubwordTextEncoder = field(default_factory=list, init=False, repr=False)
+    _questions: list = field(default_factory=list, init=False, repr=False)
+    _answers: list = field(default_factory=list, init=False, repr=False)
+    _tokenizer: tfds.deprecated.text.SubwordTextEncoder = field(default_factory=list, init=False, repr=False)
     dataset: tf.data.Dataset = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -60,14 +60,11 @@ class Corpus():
     def create(self):
         """Function to create new dataset
         """
-        self.questions = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 0].to_list()]
-        print('questions preprocessed')
-        self.answers = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 1].to_list()]
-        print('answers preprocessed')
-        self.tokenizer = tfds.deprecated.text.SubwordTextEncoder.build_from_corpus(self.questions + self.answers, target_vocab_size=2**16)
-        print('tokenized')
-        self.start_token, self.end_token = [self.tokenizer.vocab_size], [self.tokenizer.vocab_size + 1]
-        self.vocab_size = self.tokenizer.vocab_size + 2
+        self._questions = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 0].to_list()]
+        self._answers = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 1].to_list()]
+        self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.build_from_corpus(self._questions + self._answers, target_vocab_size=2**16)
+        self._start_token, self._end_token = [self._tokenizer.vocab_size], [self._tokenizer.vocab_size + 1]
+        self._vocab_size = self._tokenizer.vocab_size + 2
         self._tokenize_and_filter()
         self._create_dataset()
 
@@ -84,22 +81,22 @@ class Corpus():
 
     def _tokenize_and_filter(self):
         tokenized_inputs, tokenized_outputs = [], []
-        for (sentence1, sentence2) in zip(self.questions, self.answers):
-            sentence1 = self.start_token + self.tokenizer.encode(sentence1) + self.end_token
-            sentence2 = self.start_token + self.tokenizer.encode(sentence2) + self.end_token
+        for (sentence1, sentence2) in zip(self._questions, self._answers):
+            sentence1 = self._start_token + self._tokenizer.encode(sentence1) + self._end_token
+            sentence2 = self._start_token + self._tokenizer.encode(sentence2) + self._end_token
             if len(sentence1) <= self.max_length and len(sentence2) <= self.max_length:
                 tokenized_inputs.append(sentence1)
                 tokenized_outputs.append(sentence2)
-        self.questions = tf.keras.preprocessing.sequence.pad_sequences(
+        self._questions = tf.keras.preprocessing.sequence.pad_sequences(
             tokenized_inputs, maxlen=self.max_length, padding='post')
-        self.answers = tf.keras.preprocessing.sequence.pad_sequences(
+        self._answers = tf.keras.preprocessing.sequence.pad_sequences(
             tokenized_outputs, maxlen=self.max_length, padding='post')
 
     def _create_dataset(self):
         # pylint: disable=invalid-sequence-index
         self.dataset = tf.data.Dataset.from_tensor_slices((
-            {'inputs': self.questions,'dec_inputs': self.answers[:, :-1]},
-            {'outputs': self.answers[:, 1:]},))
+            {'inputs': self._questions,'dec_inputs': self._answers[:, :-1]},
+            {'outputs': self._answers[:, 1:]},))
         self.dataset = self.dataset.cache()
         self.dataset = self.dataset.shuffle(self.buffer_size)
         self.dataset = self.dataset.batch(self.batch_size)
@@ -108,13 +105,13 @@ class Corpus():
     def save(self, path: str = None):
         """Function to save current created instance
         """
-        self.tokenizer.save_to_file(f'{path}/tokenizer.tf')
+        self._tokenizer.save_to_file(f'{path}/tokenizer.tf')
         self.dataset.save(path=f"{path}/dataset", compression='GZIP')
 
     def load(self, path: str = None):
         """Function to load presaved instance
         """
-        self.tokenizer.load_from_file(f'{path}/tokenizer.tf')
+        self._tokenizer.load_from_file(f'{path}/tokenizer.tf')
         self.dataset.load(path=f"{path}/dataset", compression='GZIP')
-        self.start_token, self.end_token = [self.tokenizer.vocab_size], [self.tokenizer.vocab_size + 1]
-        self.vocab_size = self.tokenizer.vocab_size + 2
+        self._start_token, self._end_token = [self._tokenizer.vocab_size], [self._tokenizer.vocab_size + 1]
+        self._vocab_size = self._tokenizer.vocab_size + 2
