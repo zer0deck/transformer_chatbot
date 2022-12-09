@@ -1,5 +1,13 @@
-# pylint: disable=line-too-long
-# pylint: disable=protected-access
+"""Main transformer NN module
+
+Note: most of this code is based on [Tensorflow transformer guide](https://www.tensorflow.org/text/tutorials/transformer)
+
+The module contains:
+    1. MHA
+    2. Positional encoding
+    3. Step-based shedule
+    4. Transformer model
+"""
 from dataclasses import dataclass, field
 import tensorflow as tf
 import pandas as pd
@@ -9,7 +17,33 @@ from preprocessor import Corpus
 assert tf.__version__.startswith('2')
 tf.random.set_seed(42)
 
+# pylint: disable=line-too-long
+# pylint: disable=protected-access
 class MultiHeadAttention(tf.keras.layers.Layer):
+    """Realization of [Multi-Head Attention algorithm](https://arxiv.org/abs/1706.03762v5)
+
+    This class inherits from default [`tf.keras.layers.Layer`](https://www.tensorflow.org/api_docs/python/tf/keras/layers/Layer) and overrites it.
+
+    _Exampe Usage_
+
+    ```python
+    d_model = 256
+    num_heads = 8
+
+    inputs = tf.keras.Input(shape=(None, d_model), name="inputs")
+    enc_outputs = tf.keras.Input(shape=(None, d_model), name="encoder_outputs")
+    look_ahead_mask = tf.keras.Input(shape=(1, None, None), name="look_ahead_mask")
+    padding_mask = tf.keras.Input(shape=(1, 1, None), name='padding_mask')
+
+    attention = MultiHeadAttention(d_model, num_heads, name="attention")(inputs={'query': inputs, 'key': inputs, 'value': inputs, 'mask': look_ahead_mask})
+    attention = tf.keras.layers.LayerNormalization(epsilon=1e-6)(attention + inputs)
+    ```
+
+    Args:
+        num_heads: 
+        d_model: size of computed space (d-dimensional)
+        name: (optional str) the `tf.keras.Layer`'s name
+    """
     def __init__(self, d_model:int, num_heads:int, name: str="multi_head_attention"):
         super(MultiHeadAttention, self).__init__(name=name)
         self.num_heads = num_heads
@@ -20,11 +54,15 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         self.value_dense = tf.keras.layers.Dense(units=d_model)
         self.dense = tf.keras.layers.Dense(units=d_model)
 
-    def split_heads(self, inputs, batch_size):
+    def split_heads(self, inputs, batch_size:int):
+        """Reshape function for preparing SCALDE
+        """
         inputs = tf.reshape(inputs, shape=(batch_size, -1, self.num_heads, self.depth))
         return tf.transpose(inputs, perm=[0, 2, 1, 3])
 
     def scaled_dot_product_attention(self, query, key, value, mask):
+        """SCALDE function. Calculates dot product of independent q-,k-,v-dimensional vectors.
+        """
         matmul_qk = tf.matmul(query, key, transpose_b=True)
         depth = tf.cast(tf.shape(key)[-1], tf.float32)
         logits = matmul_qk / tf.math.sqrt(depth)
@@ -35,6 +73,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         return output
 
     def call(self, inputs):
+        """`tf.keras.layers.Layer.call()` function overriting for use this MHA.
+        """
         query, key, value, mask = inputs['query'], inputs['key'], inputs['value'], inputs['mask']
         batch_size = tf.shape(query)[0]
         query = self.query_dense(query)
@@ -50,7 +90,20 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         return outputs
 
 class StepBasedShedule(tf.keras.optimizers.schedules.LearningRateSchedule):
-    def __init__(self, d_model, warmup_steps=10000):
+    """Custom step-based optimized shedule for learning rate. Recommended by Ashish Vaswani.
+
+    Note: This class inherits from default [`tf.keras.optimizers.schedules.LearningRateSchedule`](https://www.tensorflow.org/api_docs/python/tf/keras/optimizers/schedules/LearningRateSchedule) and overrites it.
+
+    _Exampe Usage_
+
+    ```python
+    d_model = 256
+
+    learning_rate_shedule = StepBasedShedule(d_model)
+    optimizer = keras.optimizers.SGD(learning_rate=learning_rate_shedule)
+    ```    
+    """
+    def __init__(self, d_model, warmup_steps=4000):
         super(StepBasedShedule, self).__init__()
         self.d_model = d_model
         self.d_model = tf.cast(self.d_model, tf.float32)
@@ -87,6 +140,8 @@ class PositionalEncoding(tf.keras.layers.Layer):
 
 @dataclass(frozen=False, kw_only=True, slots=True)
 class Transformer():
+    """Main transformer class
+    """
     num_layers: int = field(default=3, init=True, repr=True)
     num_heads: int = field(default=8, init=True, repr=True)
     num_epoch: int = field(default=1, init=True, repr=True)
@@ -216,3 +271,24 @@ class Transformer():
 
         print(f"{self._model} compiled successfully.")
         self._model.fit(self._data_controller.dataset, epochs=self.num_epoch)
+
+    def fit_test(self, data):
+
+        inputs = tf.keras.Input(shape=(None,), name="inputs")
+        dec_inputs = tf.keras.Input(shape=(None,), name="dec_inputs")
+
+        enc_padding_mask = tf.keras.layers.Lambda(self.create_padding_mask, output_shape=(1, 1, None), name='enc_padding_mask')(inputs)
+        # mask the future tokens for decoder inputs at the 1st attention block
+        look_ahead_mask = tf.keras.layers.Lambda(self.create_look_ahead_mask, output_shape=(1, None, None), name='look_ahead_mask')(dec_inputs)
+        # mask the encoder outputs for the 2nd attention block
+        dec_padding_mask = tf.keras.layers.Lambda(self.create_padding_mask, output_shape=(1, 1, None), name='dec_padding_mask')(inputs)
+
+        enc_outputs = self.encoder()(inputs=[inputs, enc_padding_mask])
+        dec_outputs = self.decoder()(inputs=[dec_inputs, enc_outputs, look_ahead_mask, dec_padding_mask])
+        outputs = tf.keras.layers.Dense(units=self._data_controller._vocab_size, name="outputs")(dec_outputs)
+
+        self._model = tf.keras.Model(inputs=[inputs, dec_inputs], outputs=outputs, name="transformer")
+        self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy])
+
+        print(f"{self._model} compiled successfully.")
+        self._model.fit(data, epochs=self.num_epoch)
