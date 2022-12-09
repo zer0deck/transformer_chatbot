@@ -54,6 +54,7 @@ class Corpus():
 
     def __post_init__(self) -> None:
         if not self.corpus.empty:
+            print(f'{tf.data.Dataset}: Dictionary generation {self}. \n\tPlease be patient. Depending on the size of the dataset and \n\tthe number of unique words, this can take a while (up to 5 minutes).')
             self.corpus.dropna(inplace=True)
             self.create()
 
