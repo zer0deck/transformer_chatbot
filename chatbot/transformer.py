@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 import tensorflow as tf
 import pandas as pd
 from chatbot.preprocessor import Corpus
+import json
 
 
 assert tf.__version__.startswith('2')
@@ -175,6 +176,20 @@ class Transformer():
         y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
         return tf.keras.metrics.sparse_categorical_accuracy(y_true, y_pred)
 
+    def _count_f1(self, y_true: tf.Tensor, y_pred: tf.Tensor): #taken from old keras source code
+        y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
+        with tf.compat.v1.Session() as sess:  print(y_pred.eval())
+        # y_pred = tf.compat.v1.convert_to_tensor(y_pred)
+        # y_true = tf.keras.utils.to_categorical(tf.make_ndarray(y_true), len(y_pred[0]))
+        # true_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_true * y_pred, 0, 1)))
+        # possible_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_true, 0, 1)))
+        # predicted_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_pred, 0, 1)))
+        # precision = true_positives / (predicted_positives + tf.keras.backend.epsilon())
+        # recall = true_positives / (possible_positives + tf.keras.backend.epsilon())
+        # f1_score = 2*(precision*recall)/(precision+recall+tf.keras.backend.epsilon())
+        f1_score = 0
+        return f1_score
+
     def _count_loss(self, y_true, y_pred):
         y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
         loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')(y_true, y_pred)
@@ -253,6 +268,11 @@ class Transformer():
         if data !=None:
             self._data_controller = Corpus(lang=self.lang, corpus=data, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
         else:
+            with open(f'{path}/metadata.info', 'r', encoding='utf-8') as file:
+                td = json.load(file)
+            self.max_length = td['max_sent_len']
+            self.batch_size = td['batch_size']
+            self.buffer_size = td['buffer_size']
             self._data_controller = Corpus(lang=self.lang, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
             self._data_controller.load(path=path)
         print(f"Data loaded with hyperparams: {self._data_controller}.")
@@ -271,7 +291,7 @@ class Transformer():
         outputs = tf.keras.layers.Dense(units=self._data_controller._vocab_size, name="outputs")(dec_outputs)
 
         self._model = tf.keras.Model(inputs=[inputs, dec_inputs], outputs=outputs, name="transformer")
-        self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy])
+        self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
 
         print(f"{self._model} compiled successfully.")
         self._model.fit(self._data_controller.dataset, epochs=self.num_epoch)
