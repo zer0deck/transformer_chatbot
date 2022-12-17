@@ -176,18 +176,19 @@ class Transformer():
         y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
         return tf.keras.metrics.sparse_categorical_accuracy(y_true, y_pred)
 
-    def _count_f1(self, y_true: tf.Tensor, y_pred: tf.Tensor): #taken from old keras source code
+    def _count_f1(self, y_true: tf.Tensor, y_pred: tf.Tensor):
         y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
-        with tf.compat.v1.Session() as sess:  print(y_pred.eval())
-        # y_pred = tf.compat.v1.convert_to_tensor(y_pred)
-        # y_true = tf.keras.utils.to_categorical(tf.make_ndarray(y_true), len(y_pred[0]))
-        # true_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_true * y_pred, 0, 1)))
-        # possible_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_true, 0, 1)))
-        # predicted_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_pred, 0, 1)))
-        # precision = true_positives / (predicted_positives + tf.keras.backend.epsilon())
-        # recall = true_positives / (possible_positives + tf.keras.backend.epsilon())
-        # f1_score = 2*(precision*recall)/(precision+recall+tf.keras.backend.epsilon())
-        f1_score = 0
+        depth = y_pred._shape_as_list()[2]
+        y_pred = tf.math.argmax(y_pred, axis=-1,  output_type=tf.dtypes.int32)
+        y_true = tf.cast(y_true, dtype=tf.dtypes.int32)
+        y_pred = tf.one_hot(y_pred, depth=depth)
+        y_true = tf.one_hot(y_true, depth=depth)
+        true_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_true * y_pred, 0, 1)))
+        possible_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_true, 0, 1)))
+        predicted_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_pred, 0, 1)))
+        precision = true_positives / (predicted_positives + tf.keras.backend.epsilon())
+        recall = true_positives / (possible_positives + tf.keras.backend.epsilon())
+        f1_score = 2*(precision*recall)/(precision+recall+tf.keras.backend.epsilon())
         return f1_score
 
     def _count_loss(self, y_true, y_pred):
