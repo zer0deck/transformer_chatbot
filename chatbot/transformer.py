@@ -13,7 +13,7 @@ The module contains:
 from dataclasses import dataclass, field
 import tensorflow as tf
 import pandas as pd
-from preprocessor import Corpus
+from chatbot.preprocessor import Corpus
 
 
 assert tf.__version__.startswith('2')
@@ -248,9 +248,13 @@ class Transformer():
         padding_mask = self.create_padding_mask(x)
         return tf.maximum(look_ahead_mask, padding_mask)
 
-    def fit(self, data: pd.DataFrame):
-        self._data_controller = Corpus(lang=self.lang, corpus=data, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
-
+    def fit(self, data: pd.DataFrame = None, path: str = None):
+        assert data != None or path != None
+        if data !=None:
+            self._data_controller = Corpus(lang=self.lang, corpus=data, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
+        else:
+            self._data_controller = Corpus(lang=self.lang, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
+            self._data_controller.load(path=path)
         print(f"Data loaded with hyperparams: {self._data_controller}.")
 
         inputs = tf.keras.Input(shape=(None,), name="inputs")
@@ -271,3 +275,6 @@ class Transformer():
 
         print(f"{self._model} compiled successfully.")
         self._model.fit(self._data_controller.dataset, epochs=self.num_epoch)
+    
+    def save_to_folder(self, path:str = None):
+        self._model.save(f"{path}/", overwrite=True, include_optimizer=False)

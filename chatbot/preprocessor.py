@@ -112,7 +112,7 @@ class Corpus():
     def load(self, path: str = None):
         """Function to load presaved instance
         """
-        self._tokenizer.load_from_file(f'{path}/tokenizer.tf')
-        self.dataset.load(path=f"{path}/dataset", compression='GZIP')
+        self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file(f'{path}/tokenizer.tf')
+        self.dataset = tf.data.Dataset.load(path=f"{path}/tfds", compression='GZIP')
         self._start_token, self._end_token = [self._tokenizer.vocab_size], [self._tokenizer.vocab_size + 1]
         self._vocab_size = self._tokenizer.vocab_size + 2
