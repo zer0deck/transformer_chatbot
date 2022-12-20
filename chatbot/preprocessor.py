@@ -39,7 +39,7 @@ class Corpus():
         vocab_size: size of constructed vocabulary based on SubwordTextEncoder
         dataset: (tf.data.Dataset) final dataset to train transformer
     """
-    lang: str = field(default="en-us", init=True, repr=True)
+    lang: str = field(default="en", init=True, repr=True)
     max_length: int = field(default=40, init=True, repr=True)
     batch_size: int = field(default=64, init=True, repr=True)
     buffer_size: int = field(default=20000, init=True, repr=True)
@@ -51,6 +51,10 @@ class Corpus():
     _answers: list = field(default_factory=list, init=False, repr=False)
     _tokenizer: tfds.deprecated.text.SubwordTextEncoder = field(default_factory=list, init=False, repr=False)
     dataset: tf.data.Dataset = field(default_factory=list, init=False, repr=False)
+    _sent_len: list = field(default_factory=list, init=False, repr=False)
+    _fre_full: list = field(default_factory=list, init=False, repr=False)
+    fre: float = field(default=0.0, init=False, repr=True)
+    av_sent_len: float = field(default=0.0, init=False, repr=True)
 
     def __post_init__(self) -> None:
         if not self.corpus.empty:
@@ -61,6 +65,7 @@ class Corpus():
     def create(self):
         """Function to create new dataset
         """
+        # pylint: disable=unsubscriptable-object
         self._questions = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 0].to_list()]
         self._answers = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 1].to_list()]
         self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.build_from_corpus(self._questions + self._answers, target_vocab_size=2**16)
@@ -69,15 +74,95 @@ class Corpus():
         self._tokenize_and_filter()
         self._create_dataset()
 
-    def preprocess_sentence(self, sentence: str):
-        assert self.lang == 'en-us' or self.lang =='ru', "\tUnsupported language: \n\t\tuse 'ru' or 'en-us' instead."
+    def _count_fre(self, sentence:str):
+        sentence = re.sub(", ", '', sentence)
+        sentence = re.sub("[!?.:]", '.', sentence)
+        while sentence.count('. .') >0:
+            sentence = sentence.replace('. .', '.')
+        words_c = len([w for w in sentence.split(' ') if w !='.' and w])
+        if words_c == 0:
+            return None
+        sentence_c  = len([w for w in sentence.split(' ') if w =='.'])+1
+        syllable_c = 0
+        if self.lang == 'en':
+            for word in sentence:
+                if word in ('a', 'e', 'i', 'o', 'u'):
+                    syllable_c+=1
+            self._fre_full.append(206.835 - 1.015 * (words_c/sentence_c)-84.6*(syllable_c/words_c))
+        elif self.lang == 'ru':
+            for word in sentence:
+                if word in ('а', 'е', 'и', 'о', 'у', 'ы', 'я', 'э', 'ю'):
+                    syllable_c+=1
+            self._fre_full.append(206.835 - 1.3 * (words_c/sentence_c)-60.1*(syllable_c/words_c))
+
+    def preprocess_sentence(self, sentence: str) -> str:
+        """Function for single sentence preprocessing.
+
+        Works with english and russian characters now. To implement other lang just add
+        ```python
+        elif self.lang == YOUR_LANGUAGE:
+            sentence = re.sub(r"[^YOUR_LANGUAGE_CHARACTERS?.!,: ]+", "", sentence)
+        ```
+        and comment `assert` and `self._count_fre()` rows
+
+        Typical usage:
+        >>> corpus = Corpus(lang='ru', max_length=20, corpus=corpus)
+        >>> sent = 'Hi, I'm here.!'
+        >>> corpus.preprocess_sentence(sent)
+        >>> <<< 'hi , i m here !'
+
+        Args:
+            sentence: string with you sentence(s)
+
+        Returns:
+            sentence: filtered sentence
+
+        Hidden:
+            fre: updates fre for supported langs
+        """
+        assert self.lang == 'en' or self.lang =='ru', "\tUnsupported language: \n\t\tuse 'ru' or 'en' instead."
         sentence = sentence.lower().strip()
         sentence = sentence.replace('\n', '')
         if self.lang == 'ru':
-            sentence = re.sub(r"[^а-яА-Я?.!,]+", " ", sentence)
-        elif self.lang == 'en-us':
-            sentence = re.sub(r"[^a-zA-Z?.!,]+", " ", sentence)
+            sentence = re.sub(r"[^а-яА-Я?.!,: ]+", "", sentence)
+        elif self.lang == 'en':
+            sentence = re.sub(r"[^a-zA-Z?.!,: ]+", "", sentence)
+        sentence = re.sub(r' *([.,!?:]) *', r' \1 ', sentence)
+        sentence = [value for value in sentence.split(' ') if value]
+        sentence = ' '.join(sentence)
+        while sentence.count('? ?') >0:
+            sentence = sentence.replace('? ?', '?')
+        while sentence.count('. .') >0:
+            sentence = sentence.replace('. .', '.')
+        while sentence.count('! !') >0:
+            sentence = sentence.replace('! !', '!')
+        while sentence.count(', ,') >0:
+            sentence = sentence.replace(', ,', ',')
+        while sentence.count(': :') >0:
+            sentence = sentence.replace(': :', ':')
+        sentence = sentence.replace('! ?', '? !')
+
+        sentence = sentence.replace(': .', ':')
+        sentence = sentence.replace('? :', ':')
+        sentence = sentence.replace(', :', ':')
+        sentence = sentence.replace('! :', ':')
+        sentence = sentence.replace(': !', ':')
+        sentence = sentence.replace(': ?', ':')
+        sentence = sentence.replace('. :', ':')
+        sentence = sentence.replace(': ,', ':')
+
+        sentence = sentence.replace('! .', '!')
+        sentence = sentence.replace('? .', '?')
+        sentence = sentence.replace(', .', ',')
+        sentence = sentence.replace('. !', '!')
+        sentence = sentence.replace('. ?', '?')
+        sentence = sentence.replace('. ,', ',')
+        sentence = sentence.replace('! ,', '!')
+        sentence = sentence.replace('? ,', '?')
+        sentence = sentence.replace(', !', '!')
+        sentence = sentence.replace(', ?', '?')
         sentence = sentence.strip()
+        self._count_fre(sentence)
         return sentence
 
     def _tokenize_and_filter(self):
@@ -86,6 +171,7 @@ class Corpus():
             sentence1 = self._start_token + self._tokenizer.encode(sentence1) + self._end_token
             sentence2 = self._start_token + self._tokenizer.encode(sentence2) + self._end_token
             if len(sentence1) <= self.max_length and len(sentence2) <= self.max_length:
+                self._sent_len.append(len(sentence1))
                 tokenized_inputs.append(sentence1)
                 tokenized_outputs.append(sentence2)
         self._questions = tf.keras.preprocessing.sequence.pad_sequences(
@@ -108,6 +194,16 @@ class Corpus():
         """
         self._tokenizer.save_to_file(f'{path}/tokenizer.tf')
         self.dataset.save(path=f"{path}/dataset", compression='GZIP')
+
+    def _load(self, path:str, batch_size, lang, max_length, buffer_size):
+        self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file(f'{path}/tokenizer.tf')
+        self._start_token, self._end_token = [self._tokenizer.vocab_size], [self._tokenizer.vocab_size + 1]
+        self._vocab_size = self._tokenizer.vocab_size + 2
+        self.batch_size = batch_size
+        self.lang = lang
+        self.max_length = max_length
+        self.buffer_size = buffer_size
+
 
     def load(self, path: str = None):
         """Function to load presaved instance
