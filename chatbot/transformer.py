@@ -1,5 +1,4 @@
-# pylint: disable=line-too-long
-# pylint: disable=protected-access
+# pylint: disable=[line-too-long, protected-access, arguments-differ]
 """Main transformer NN module
 
 Note: most of this code is based on [Tensorflow transformer guide](https://www.tensorflow.org/text/tutorials/transformer)
@@ -10,11 +9,13 @@ The module contains:
     3. Step-based shedule
     4. Transformer model
 """
+import json
 from dataclasses import dataclass, field
 import tensorflow as tf
+import tensorflow_ranking as tfr
 import pandas as pd
 from chatbot.preprocessor import Corpus
-import json
+
 
 
 assert tf.__version__.startswith('2')
@@ -41,7 +42,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
     ```
 
     Args:
-        num_heads: 
+        num_heads:
         d_model: size of computed space (d-dimensional)
         name: (optional str) the `tf.keras.Layer`'s name
     """
@@ -102,7 +103,7 @@ class StepBasedShedule(tf.keras.optimizers.schedules.LearningRateSchedule):
 
     learning_rate_shedule = StepBasedShedule(d_model)
     optimizer = keras.optimizers.SGD(learning_rate=learning_rate_shedule)
-    ```    
+    ```
     """
     def __init__(self, d_model, warmup_steps=4000):
         super(StepBasedShedule, self).__init__()
@@ -118,6 +119,7 @@ class StepBasedShedule(tf.keras.optimizers.schedules.LearningRateSchedule):
         config = {'d_model': self.d_model,'warmup_steps': self.warmup_steps,}
         return config
 
+# pylint: disable=[missing-class-docstring, missing-function-docstring, unexpected-keyword-arg]
 class PositionalEncoding(tf.keras.layers.Layer):
 
     def __init__(self, position, d_model):
@@ -138,6 +140,7 @@ class PositionalEncoding(tf.keras.layers.Layer):
 
     def call(self, inputs):
         return inputs + self.pos_encoding[:, :tf.shape(inputs)[1], :]
+# pylint: enable=[missing-class-docstring, missing-function-docstring, unexpected-keyword-arg]
 
 @dataclass(frozen=False, kw_only=True, slots=True)
 class Transformer():
@@ -179,10 +182,12 @@ class Transformer():
     def _count_f1(self, y_true: tf.Tensor, y_pred: tf.Tensor):
         y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
         depth = y_pred._shape_as_list()[2]
-        y_pred = tf.math.argmax(y_pred, axis=-1,  output_type=tf.dtypes.int32)
+        # y_pred = tf.math.argmax(y_pred, axis=-1,  output_type=tf.dtypes.int32)
         y_true = tf.cast(y_true, dtype=tf.dtypes.int32)
-        y_pred = tf.one_hot(y_pred, depth=depth)
+        # y_pred = tf.one_hot(y_pred, depth=depth)
         y_true = tf.one_hot(y_true, depth=depth)
+        y_true = tf.cast(y_true, dtype=tf.dtypes.float32)
+        # y_pred = tf.math.l2_normalize(y_pred, axis=1)
         true_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_true * y_pred, 0, 1)))
         possible_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_true, 0, 1)))
         predicted_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_pred, 0, 1)))
@@ -190,6 +195,16 @@ class Transformer():
         recall = true_positives / (possible_positives + tf.keras.backend.epsilon())
         f1_score = 2*(precision*recall)/(precision+recall+tf.keras.backend.epsilon())
         return f1_score
+
+    def _count_mrr(self, y_true: tf.Tensor, y_pred: tf.Tensor):
+        y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
+        depth = y_pred._shape_as_list()[2]
+        y_true = tf.cast(y_true, dtype=tf.dtypes.int32)
+        y_true = tf.one_hot(y_true, depth=depth)
+        y_true = tf.cast(y_true, dtype=tf.dtypes.float32)
+        mrr = tfr.keras.metrics.MRRMetric()
+        
+        return mrr(y_true, y_pred)
 
     def _count_loss(self, y_true, y_pred):
         y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
@@ -216,6 +231,8 @@ class Transformer():
         return tf.keras.Model(inputs=[inputs, enc_outputs, look_ahead_mask, padding_mask], outputs=outputs, name=name)
 
     def decoder(self):
+        """Decoder
+        """
         inputs = tf.keras.Input(shape=(None,), name='inputs')
         enc_outputs = tf.keras.Input(shape=(None, self.d_model), name='encoder_outputs')
         look_ahead_mask = tf.keras.Input(shape=(1, None, None), name='look_ahead_mask')
@@ -243,6 +260,8 @@ class Transformer():
         return tf.keras.Model(inputs=[inputs, padding_mask], outputs=outputs, name=name)
 
     def encoder(self):
+        """Encoder
+        """
         inputs = tf.keras.Input(shape=(None,), name="inputs")
         padding_mask = tf.keras.Input(shape=(1, 1, None), name="padding_mask")
         embeddings = tf.keras.layers.Embedding(self._data_controller._vocab_size, self.d_model)(inputs)
@@ -255,25 +274,31 @@ class Transformer():
         return tf.keras.Model(inputs=[inputs, padding_mask], outputs=outputs, name="encoder")
 
     def create_padding_mask(self, x):
+        """Makes Pmask for traing
+        """
         mask = tf.cast(tf.math.equal(x, 0), tf.float32)
         return mask[:, tf.newaxis, tf.newaxis, :]
 
     def create_look_ahead_mask(self, x):
+        """Makes LAmask for traing
+        """
         seq_len = tf.shape(x)[1]
         look_ahead_mask = 1 - tf.linalg.band_part(tf.ones((seq_len, seq_len)), -1, 0)
         padding_mask = self.create_padding_mask(x)
         return tf.maximum(look_ahead_mask, padding_mask)
 
     def fit(self, data: pd.DataFrame = None, path: str = None):
-        assert data != None or path != None
-        if data !=None:
+        """Training function
+        """
+        assert data is not None or path is not None
+        if data is not None:
             self._data_controller = Corpus(lang=self.lang, corpus=data, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
         else:
             with open(f'{path}/metadata.info', 'r', encoding='utf-8') as file:
-                td = json.load(file)
-            self.max_length = td['max_sent_len']
-            self.batch_size = td['batch_size']
-            self.buffer_size = td['buffer_size']
+                temp_d = json.load(file)
+            self.max_length = temp_d['max_sent_len']
+            self.batch_size = temp_d['batch_size']
+            self.buffer_size = temp_d['buffer_size']
             self._data_controller = Corpus(lang=self.lang, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
             self._data_controller.load(path=path)
         print(f"Data loaded with hyperparams: {self._data_controller}.")
@@ -292,10 +317,30 @@ class Transformer():
         outputs = tf.keras.layers.Dense(units=self._data_controller._vocab_size, name="outputs")(dec_outputs)
 
         self._model = tf.keras.Model(inputs=[inputs, dec_inputs], outputs=outputs, name="transformer")
-        self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
+        self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1, self._count_mrr])
 
         print(f"{self._model} compiled successfully.")
         self._model.fit(self._data_controller.dataset, epochs=self.num_epoch)
-    
+
+    def load(self, path:str):
+        '''
+        Function to initialize model with loading
+        '''
+        with open(f'{path}/metadata.info', 'r', encoding='utf-8') as file:
+            temp_d = json.load(file)
+        self.num_layers = temp_d['num_layers']
+        self.num_heads = temp_d['num_heads']
+        self.num_epoch = temp_d['num_epoch']
+        self.units = temp_d['units']
+        self.treshold = temp_d['treshold']
+        self.d_model = temp_d['d_model']
+        self.lang = temp_d['lang']
+        self.max_length = temp_d['max_length']
+        self.batch_size = temp_d['batch_size']
+        self.buffer_size = temp_d['buffer_size']
+        self._model = tf.keras.models.load_model(path, custom_objects={'StepBasedShedule': StepBasedShedule, 'MultiHeadAttention': MultiHeadAttention, 'encoder_layer': self._create_encoder_layer, 'decoder_layer': self._create_decoder_layer, 'encoder': self.encoder, 'decoder': self.decoder, 'create_look_ahead_mask': self.create_look_ahead_mask, 'create_padding_mask': self.create_padding_mask})
+
     def save_to_folder(self, path:str = None):
+        """Saves model to folder
+        """
         self._model.save(f"{path}/", overwrite=True, include_optimizer=False)
