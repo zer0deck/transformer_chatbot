@@ -152,7 +152,7 @@ class Transformer():
     units: int = field(default=2048, init=True, repr=True)
     treshold: float = field(default=0.1, init=True, repr=True)
     d_model: int = field(default=512, init=False, repr=True)
-    lang: str = field(default="en-us", init=True, repr=True)
+    lang: str = field(default="en", init=True, repr=True)
     max_length: int = field(default=40, init=True, repr=True)
     batch_size: int = field(default=64, init=True, repr=True)
     buffer_size: int = field(default=20000, init=True, repr=True)
@@ -317,7 +317,7 @@ class Transformer():
         outputs = tf.keras.layers.Dense(units=self._data_controller._vocab_size, name="outputs")(dec_outputs)
 
         self._model = tf.keras.Model(inputs=[inputs, dec_inputs], outputs=outputs, name="transformer")
-        self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1, self._count_mrr])
+        self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
 
         print(f"{self._model} compiled successfully.")
         self._model.fit(self._data_controller.dataset, epochs=self.num_epoch)
@@ -344,3 +344,41 @@ class Transformer():
         """Saves model to folder
         """
         self._model.save(f"{path}/", overwrite=True, include_optimizer=False)
+
+    def evaluate(self, sentence: str):
+
+        sentence = tf.expand_dims(self._data_controller._start_token + self._data_controller._tokenizer.encode(sentence) + self._data_controller._end_token, axis=0)
+
+        output = tf.expand_dims(self._data_controller._start_token, 0)
+
+        for i in range(self.max_length):
+            predictions = self._model(inputs=[sentence, output], training=False)
+
+            # select the last word from the seq_len dimension
+            predictions = predictions[:, -1:, :]
+            predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
+
+            # return the result if the predicted_id is equal to the end token
+            if tf.equal(predicted_id, self._data_controller._end_token[0]):
+                break
+
+            # concatenated the predicted_id to the output which is given to the decoder
+            # as its input.
+            output = tf.concat([output, predicted_id], axis=-1)
+
+        return tf.squeeze(output, axis=0)
+
+    def predict(self, sentence: str):
+        prediction = self.evaluate(sentence)
+
+        predicted_sentence = self._data_controller._tokenizer.decode([i for i in prediction if i < self._data_controller._tokenizer.vocab_size])
+
+        return predicted_sentence
+    
+    def chat(self):
+        while True:
+            text = input('Введите текст:')
+            if text == '0':
+                break
+            text = self._data_controller.preprocess_sentence(text)
+            print(self.predict(text))
