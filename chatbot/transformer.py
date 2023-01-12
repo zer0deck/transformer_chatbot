@@ -203,7 +203,7 @@ class Transformer():
         y_true = tf.one_hot(y_true, depth=depth)
         y_true = tf.cast(y_true, dtype=tf.dtypes.float32)
         mrr = tfr.keras.metrics.MRRMetric()
-        
+
         return mrr(y_true, y_pred)
 
     def _count_loss(self, y_true, y_pred):
@@ -351,7 +351,7 @@ class Transformer():
 
         output = tf.expand_dims(self._data_controller._start_token, 0)
 
-        for i in range(self.max_length):
+        for _ in range(self.max_length):
             predictions = self._model(inputs=[sentence, output], training=False)
 
             # select the last word from the seq_len dimension
@@ -369,13 +369,18 @@ class Transformer():
         return tf.squeeze(output, axis=0)
 
     def predict(self, sentence: str):
+        """Function to predict sentence
+        """
         prediction = self.evaluate(sentence)
 
         predicted_sentence = self._data_controller._tokenizer.decode([i for i in prediction if i < self._data_controller._tokenizer.vocab_size])
 
         return predicted_sentence
-    
+
     def chat(self):
+        """
+        Chat conversation init
+        """
         while True:
             text = input('Введите текст:')
             if text == '0':

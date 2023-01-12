@@ -2,11 +2,10 @@
 """Bidirectional RNN model file
 """
 import json
+import re
 from dataclasses import dataclass, field
 import tensorflow as tf
-import tensorflow_addons as tfa
 import pandas as pd
-import re
 import numpy as np
 from chatbot.preprocessor import Corpus
 
@@ -15,8 +14,6 @@ class Recurrent():
     """Bidirectional model
     """
     num_epoch: int = field(default=1, init=True, repr=True)
-    treshold: float = field(default=0.1, init=True, repr=True)
-    d_model: int = field(default=512, init=False, repr=True)
     lang: str = field(default="en-us", init=True, repr=True)
     max_length: int = field(default=40, init=True, repr=True)
     batch_size: int = field(default=64, init=True, repr=True)
@@ -67,7 +64,8 @@ class Recurrent():
         return f1_score
 
     def fit(self, data: pd.DataFrame = None, path: str = None):
-
+        """Training function
+        """
         assert data is not None or path is not None
         if data is not None:
             self._data_controller = Corpus(lang=self.lang, corpus=data, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
@@ -91,17 +89,17 @@ class Recurrent():
         self._model.add(tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(256, return_sequences=True)))
         self._model.add(tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(1024, activation='relu')))
         self._model.add(tf.keras.layers.Dropout(0.5))
-        self._model.add(tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(self._data_controller._vocab_size, activation='softmax'))) 
-        
-        x = np.asarray([np.asarray(xi) for xi in data['tokenized_questions']])
-        y = np.asarray([np.asarray(xi) for xi in data['tokenized_answers']])
+        self._model.add(tf.keras.layers.TimeDistributed(tf.keras.layers.Dense(self._data_controller._vocab_size, activation='softmax')))
+        inputs = np.asarray([np.asarray(xi) for xi in data['tokenized_questions']])
+        outputs = np.asarray([np.asarray(xi) for xi in data['tokenized_answers']])
         # self._model.compile(optimizer=self._optimizer, loss=tf.keras.losses.sparse_categorical_crossentropy, metrics=[self._count_accuracy, self._count_f1])
         self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
         print(f"{self._model} compiled successfully.")
-        self._model.fit(x, y, epochs=self.num_epoch)
+        self._model.fit(inputs, outputs, epochs=self.num_epoch)
 
     def pred(self, inp:str = 'hi how are you ?'):
-
+        """Prediction for a sentence
+        """
         inp:list = self._data_controller._start_token + self._data_controller._tokenizer.encode(inp) + self._data_controller._end_token
         while len(inp) < self.max_length:
             inp.append(0)
@@ -116,12 +114,7 @@ class Recurrent():
         '''
         with open(f'{path}/metadata.info', 'r', encoding='utf-8') as file:
             temp_d = json.load(file)
-        self.num_layers = temp_d['num_layers']
-        self.num_heads = temp_d['num_heads']
         self.num_epoch = temp_d['num_epoch']
-        self.units = temp_d['units']
-        self.treshold = temp_d['treshold']
-        self.d_model = temp_d['d_model']
         self.lang = temp_d['lang']
         self.max_length = temp_d['max_length']
         self.batch_size = temp_d['batch_size']
