@@ -27,6 +27,7 @@ class Recurrent():
     _momentum: float = field(default=0.9, init=True, repr=False)
     _data_controller: Corpus = field(default_factory=Corpus, init=False, repr=False)
     _model: tf.keras.Model = field(default_factory=tf.keras.Model, init=False, repr=False)
+    history: tf.keras.callbacks.History = field(default_factory=tf.keras.callbacks.History, init=False, repr=False)
 
     def __post_init__(self):
         tf.keras.backend.clear_session()
@@ -97,8 +98,8 @@ class Recurrent():
         # self._model.compile(optimizer=self._optimizer, loss=tf.keras.losses.sparse_categorical_crossentropy, metrics=[self._count_accuracy, self._count_f1])
         self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
         print(f"{self._model} compiled successfully.")
-        history = self._model.fit(inputs, outputs, epochs=self.num_epoch)
-        return history
+        self.history = self._model.fit(inputs, outputs, epochs=self.num_epoch)
+        return self.history.history
 
     def pred(self, inp:str = 'hi how are you ?'):
         """Prediction for a sentence
