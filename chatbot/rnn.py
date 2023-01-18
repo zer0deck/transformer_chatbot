@@ -81,6 +81,8 @@ class Recurrent():
             self.batch_size = temp_d['batch_size']
             self.buffer_size = temp_d['buffer_size']
             self._data_controller = Corpus(lang=self.lang, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
+            self._data_controller.fre = temp_d['FRE']
+            self._data_controller.av_sent_len = temp_d['average_sentence_length']
             self._data_controller.load(path=path)
         print(f"Data loaded with hyperparams: {self._data_controller}.")
         # print(f'{self._data_controller.dataset.cardinality().numpy()}')
@@ -95,7 +97,8 @@ class Recurrent():
         # self._model.compile(optimizer=self._optimizer, loss=tf.keras.losses.sparse_categorical_crossentropy, metrics=[self._count_accuracy, self._count_f1])
         self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
         print(f"{self._model} compiled successfully.")
-        self._model.fit(inputs, outputs, epochs=self.num_epoch)
+        history = self._model.fit(inputs, outputs, epochs=self.num_epoch)
+        return history
 
     def pred(self, inp:str = 'hi how are you ?'):
         """Prediction for a sentence

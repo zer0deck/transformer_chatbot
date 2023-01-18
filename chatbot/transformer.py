@@ -165,6 +165,7 @@ class Transformer():
     _momentum: float = field(default=0, init=True, repr=False)
     _data_controller: Corpus = field(default_factory=Corpus, init=False, repr=False)
     _model: tf.keras.Model = field(default_factory=tf.keras.Model, init=False, repr=False)
+    history: tf.keras.callbacks.History = field(default_factory=tf.keras.callbacks.History, init=False, repr=False)
 
     def __post_init__(self):
         tf.keras.backend.clear_session()
@@ -300,6 +301,8 @@ class Transformer():
             self.batch_size = temp_d['batch_size']
             self.buffer_size = temp_d['buffer_size']
             self._data_controller = Corpus(lang=self.lang, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
+            self._data_controller.fre = temp_d['FRE']
+            self._data_controller.av_sent_len = temp_d['average_sentence_length']
             self._data_controller.load(path=path)
         print(f"Data loaded with hyperparams: {self._data_controller}.")
 
@@ -320,7 +323,8 @@ class Transformer():
         self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
 
         print(f"{self._model} compiled successfully.")
-        self._model.fit(self._data_controller.dataset, epochs=self.num_epoch)
+        self.history = self._model.fit(self._data_controller.dataset, epochs=self.num_epoch)
+        return self.history.history
 
     def load(self, path:str):
         '''
