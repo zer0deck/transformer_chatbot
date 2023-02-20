@@ -49,6 +49,8 @@ class Corpus():
     corpus: pd.DataFrame = field(default=pd.DataFrame, init=True, repr=False)
     _questions: list = field(default_factory=list, init=False, repr=False)
     _answers: list = field(default_factory=list, init=False, repr=False)
+    _emotions: list = field(default_factory=list, init=False, repr=False)
+    _context: list = field(default_factory=list, init=False, repr=False)
     _tokenizer: tfds.deprecated.text.SubwordTextEncoder = field(default_factory=list, init=False, repr=False)
     dataset: tf.data.Dataset = field(default_factory=list, init=False, repr=False)
     _sent_len: list = field(default_factory=list, init=False, repr=False)
@@ -68,7 +70,9 @@ class Corpus():
         # pylint: disable=unsubscriptable-object
         self._questions = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 0].to_list()]
         self._answers = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 1].to_list()]
-        self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.build_from_corpus(self._questions + self._answers, target_vocab_size=2**16)
+        self._emotions = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 2].to_list()]
+        self._context = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 3].to_list()]
+        self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.build_from_corpus(self._questions + self._answers + self._emotions + self._context, target_vocab_size=2**16)
         self._start_token, self._end_token = [self._tokenizer.vocab_size], [self._tokenizer.vocab_size + 1]
         self._vocab_size = self._tokenizer.vocab_size + 2
         self._tokenize_and_filter()
@@ -182,7 +186,12 @@ class Corpus():
     def _create_dataset(self):
         # pylint: disable=invalid-sequence-index
         self.dataset = tf.data.Dataset.from_tensor_slices((
-            {'inputs': self._questions,'dec_inputs': self._answers[:, :-1]},
+            {
+                'input1': self._questions,
+                'input2': self._emotions,
+                'input3': self._context,
+                'dec_inputs': self._answers[:, :-1]
+            },
             {'outputs': self._answers[:, 1:]},))
         self.dataset = self.dataset.cache()
         self.dataset = self.dataset.shuffle(self.buffer_size)
