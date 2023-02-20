@@ -317,20 +317,22 @@ class Transformer():
             self._data_controller.load(path=path)
         print(f"Data loaded with hyperparams: {self._data_controller}.")
 
-        inputs = tf.keras.Input(shape=(None,), name="inputs")
+        input1 = tf.keras.Input(shape=(None,), name="input1")
+        input2 = tf.keras.Input(shape=(None,), name="input2")
+        input3 = tf.keras.Input(shape=(None,), name="input3")
         dec_inputs = tf.keras.Input(shape=(None,), name="dec_inputs")
 
-        enc_padding_mask = tf.keras.layers.Lambda(self.create_padding_mask, output_shape=(1, 1, None), name='enc_padding_mask')(inputs)
+        enc_padding_mask = tf.keras.layers.Lambda(self.create_padding_mask, output_shape=(1, 1, None), name='enc_padding_mask')(input1)
         # mask the future tokens for decoder inputs at the 1st attention block
         look_ahead_mask = tf.keras.layers.Lambda(self.create_look_ahead_mask, output_shape=(1, None, None), name='look_ahead_mask')(dec_inputs)
         # mask the encoder outputs for the 2nd attention block
-        dec_padding_mask = tf.keras.layers.Lambda(self.create_padding_mask, output_shape=(1, 1, None), name='dec_padding_mask')(inputs)
+        dec_padding_mask = tf.keras.layers.Lambda(self.create_padding_mask, output_shape=(1, 1, None), name='dec_padding_mask')(input1)
 
-        enc_outputs = self.encoder()(inputs=[inputs, enc_padding_mask])
+        enc_outputs = self.encoder()(inputs=[input1, input2, input3, enc_padding_mask])
         dec_outputs = self.decoder()(inputs=[dec_inputs, enc_outputs, look_ahead_mask, dec_padding_mask])
         outputs = tf.keras.layers.Dense(units=self._data_controller._vocab_size, name="outputs")(dec_outputs)
 
-        self._model = tf.keras.Model(inputs=[inputs, dec_inputs], outputs=outputs, name="transformer")
+        self._model = tf.keras.Model(inputs=[input1, input2, input3, dec_inputs], outputs=outputs, name="transformer")
         self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
 
         print(f"{self._model} compiled successfully.")
