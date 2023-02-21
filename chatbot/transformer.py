@@ -1,4 +1,4 @@
-# pylint: disable=[line-too-long, protected-access, arguments-differ]
+# pylint: disable=[line-too-long, protected-access, arguments-differ, no-value-for-parameter]
 """Main transformer NN module
 
 Note: most of this code is based on [Tensorflow transformer guide](https://www.tensorflow.org/text/tutorials/transformer)
@@ -14,7 +14,8 @@ from dataclasses import dataclass, field
 import tensorflow as tf
 import tensorflow_ranking as tfr
 import pandas as pd
-from chatbot.preprocessor import Corpus
+from chatbot.preprocessor import Corpus, preprocess_sentence
+from chatbot.context_classificator import ContextClassificator
 
 
 
@@ -165,6 +166,7 @@ class Transformer():
     _momentum: float = field(default=0, init=True, repr=False)
     _data_controller: Corpus = field(default_factory=Corpus, init=False, repr=False)
     _model: tf.keras.Model = field(default_factory=tf.keras.Model, init=False, repr=False)
+    _context_classificator: ContextClassificator = field(default_factory=ContextClassificator, init=False, repr=False)
     history: tf.keras.callbacks.History = field(default_factory=tf.keras.callbacks.History, init=False, repr=False)
 
     def __post_init__(self):
@@ -285,6 +287,7 @@ class Transformer():
 
         return tf.keras.Model(inputs=[input1, input2, input3, padding_mask], outputs=outputs, name="encoder")
 
+# pylint: disable = [invalid-name]
     def create_padding_mask(self, x):
         """Makes Pmask for traing
         """
@@ -298,6 +301,7 @@ class Transformer():
         look_ahead_mask = 1 - tf.linalg.band_part(tf.ones((seq_len, seq_len)), -1, 0)
         padding_mask = self.create_padding_mask(x)
         return tf.maximum(look_ahead_mask, padding_mask)
+# pylint: enable = [invalid-name]
 
     def fit(self, data: pd.DataFrame = None, path: str = None):
         """Training function
@@ -339,7 +343,7 @@ class Transformer():
         self.history = self._model.fit(self._data_controller.dataset, epochs=self.num_epoch)
         return self.history.history
 
-    def load(self, path:str, path_meta):
+    def load(self, path:str, path_classificator, path_meta):
         '''
         Function to initialize model with loading
         '''
@@ -369,20 +373,24 @@ class Transformer():
                                                                         '_count_accuracy': self._count_accuracy, 
                                                                         '_count_f1': self._count_f1})
         self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
+        self._context_classificator.load(path_classificator)
 
     def save_to_folder(self, path:str = None):
         """Saves model to folder
         """
         self._model.save(f"{path}/", overwrite=True, include_optimizer=False)
 
-    def evaluate(self, sentence: str):
+# pylint: disable = [missing-function-docstring, unexpected-keyword-arg, unsubscriptable-object]
+    def evaluate(self, sentence: str, classificator_path:str = 'trained_models'):
 
         sentence = tf.expand_dims(self._data_controller._start_token + self._data_controller._tokenizer.encode(sentence) + self._data_controller._end_token, axis=0)
-
+        if not self._context_classificator._is_loaded: self._context_classificator.load(classificator_path)
+        tag = tf.expand_dims(self._context_classificator.predict(sentence), axis=0)
+        emote = None
         output = tf.expand_dims(self._data_controller._start_token, 0)
 
         for _ in range(self.max_length):
-            predictions = self._model(inputs=[sentence, output], training=False)
+            predictions = self._model(inputs=[sentence, emote, tag, output], training=False)
 
             # select the last word from the seq_len dimension
             predictions = predictions[:, -1:, :]
@@ -397,6 +405,7 @@ class Transformer():
             output = tf.concat([output, predicted_id], axis=-1)
 
         return tf.squeeze(output, axis=0)
+# pylint: enable = [missing-function-docstring, unexpected-keyword-arg, unsubscriptable-object]
 
     def predict(self, sentence: str):
         """Function to predict sentence
@@ -415,6 +424,6 @@ class Transformer():
             text = input('Введите текст:')
             if text == '0':
                 break
-            text = self._data_controller.preprocess_sentence(text)
+            text = preprocess_sentence(text)
             print(text)
             print(self.predict(text))

@@ -9,8 +9,76 @@ import pandas as pd
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
-__all__ = ["Corpus"]
+__all__ = ["Corpus", "preprocess_sentence"]
 # pylint: disable=line-too-long
+def preprocess_sentence(sentence: str, lang:str='en') -> str:
+    """Function for single sentence preprocessing.
+
+    Works with english and russian characters now. To implement other lang just add
+    ```python
+    elif self.lang == YOUR_LANGUAGE:
+        sentence = re.sub(r"[^YOUR_LANGUAGE_CHARACTERS?.!,: ]+", "", sentence)
+    ```
+    and comment `assert` and `self._count_fre()` rows
+
+    Typical usage:
+    >>> corpus = Corpus(lang='ru', max_length=20, corpus=corpus)
+    >>> sent = 'Hi, I'm here.!'
+    >>> corpus.preprocess_sentence(sent)
+    >>> <<< 'hi , i m here !'
+
+    Args:
+        sentence: string with you sentence(s)
+
+    Returns:
+        sentence: filtered sentence
+
+    Hidden:
+        fre: updates fre for supported langs
+    """
+    assert lang == 'en' or lang =='ru', "\tUnsupported language: \n\t\tuse 'ru' or 'en' instead."
+    sentence = sentence.lower().strip()
+    sentence = sentence.replace('\n', '')
+    if lang == 'ru':
+        sentence = re.sub(r"[^а-яА-Я?.!,: ]+", "", sentence)
+    elif lang == 'en':
+        sentence = re.sub(r"[^a-zA-Z?.!,: ]+", "", sentence)
+    sentence = re.sub(r' *([.,!?:]) *', r' \1 ', sentence)
+    sentence = [value for value in sentence.split(' ') if value]
+    sentence = ' '.join(sentence)
+    while sentence.count('? ?') >0:
+        sentence = sentence.replace('? ?', '?')
+    while sentence.count('. .') >0:
+        sentence = sentence.replace('. .', '.')
+    while sentence.count('! !') >0:
+        sentence = sentence.replace('! !', '!')
+    while sentence.count(', ,') >0:
+        sentence = sentence.replace(', ,', ',')
+    while sentence.count(': :') >0:
+        sentence = sentence.replace(': :', ':')
+    sentence = sentence.replace('! ?', '? !')
+
+    sentence = sentence.replace(': .', ':')
+    sentence = sentence.replace('? :', ':')
+    sentence = sentence.replace(', :', ':')
+    sentence = sentence.replace('! :', ':')
+    sentence = sentence.replace(': !', ':')
+    sentence = sentence.replace(': ?', ':')
+    sentence = sentence.replace('. :', ':')
+    sentence = sentence.replace(': ,', ':')
+
+    sentence = sentence.replace('! .', '!')
+    sentence = sentence.replace('? .', '?')
+    sentence = sentence.replace(', .', ',')
+    sentence = sentence.replace('. !', '!')
+    sentence = sentence.replace('. ?', '?')
+    sentence = sentence.replace('. ,', ',')
+    sentence = sentence.replace('! ,', '!')
+    sentence = sentence.replace('? ,', '?')
+    sentence = sentence.replace(', !', '!')
+    sentence = sentence.replace(', ?', '?')
+    sentence = sentence.strip()
+    return sentence
 
 @dataclass(frozen=False, kw_only=True, slots=True)
 class Corpus():
@@ -68,10 +136,10 @@ class Corpus():
         """Function to create new dataset
         """
         # pylint: disable=unsubscriptable-object
-        self._questions = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 0].to_list()]
-        self._answers = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 1].to_list()]
-        self._emotions = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 2].to_list()]
-        self._context = [self.preprocess_sentence(sent) for sent in self.corpus.iloc[:, 3].to_list()]
+        self._questions = [self._preprocess_sentence(sent) for sent in self.corpus.iloc[:, 0].to_list()]
+        self._answers = [self._preprocess_sentence(sent) for sent in self.corpus.iloc[:, 1].to_list()]
+        self._emotions = [self._preprocess_sentence(sent) for sent in self.corpus.iloc[:, 2].to_list()]
+        self._context = [self._preprocess_sentence(sent) for sent in self.corpus.iloc[:, 3].to_list()]
         self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.build_from_corpus(self._questions + self._answers + self._emotions + self._context, target_vocab_size=2**16)
         self._start_token, self._end_token = [self._tokenizer.vocab_size], [self._tokenizer.vocab_size + 1]
         self._vocab_size = self._tokenizer.vocab_size + 2
@@ -99,73 +167,8 @@ class Corpus():
                     syllable_c+=1
             self._fre_full.append(206.835 - 1.3 * (words_c/sentence_c)-60.1*(syllable_c/words_c))
 
-    def preprocess_sentence(self, sentence: str) -> str:
-        """Function for single sentence preprocessing.
-
-        Works with english and russian characters now. To implement other lang just add
-        ```python
-        elif self.lang == YOUR_LANGUAGE:
-            sentence = re.sub(r"[^YOUR_LANGUAGE_CHARACTERS?.!,: ]+", "", sentence)
-        ```
-        and comment `assert` and `self._count_fre()` rows
-
-        Typical usage:
-        >>> corpus = Corpus(lang='ru', max_length=20, corpus=corpus)
-        >>> sent = 'Hi, I'm here.!'
-        >>> corpus.preprocess_sentence(sent)
-        >>> <<< 'hi , i m here !'
-
-        Args:
-            sentence: string with you sentence(s)
-
-        Returns:
-            sentence: filtered sentence
-
-        Hidden:
-            fre: updates fre for supported langs
-        """
-        assert self.lang == 'en' or self.lang =='ru', "\tUnsupported language: \n\t\tuse 'ru' or 'en' instead."
-        sentence = sentence.lower().strip()
-        sentence = sentence.replace('\n', '')
-        if self.lang == 'ru':
-            sentence = re.sub(r"[^а-яА-Я?.!,: ]+", "", sentence)
-        elif self.lang == 'en':
-            sentence = re.sub(r"[^a-zA-Z?.!,: ]+", "", sentence)
-        sentence = re.sub(r' *([.,!?:]) *', r' \1 ', sentence)
-        sentence = [value for value in sentence.split(' ') if value]
-        sentence = ' '.join(sentence)
-        while sentence.count('? ?') >0:
-            sentence = sentence.replace('? ?', '?')
-        while sentence.count('. .') >0:
-            sentence = sentence.replace('. .', '.')
-        while sentence.count('! !') >0:
-            sentence = sentence.replace('! !', '!')
-        while sentence.count(', ,') >0:
-            sentence = sentence.replace(', ,', ',')
-        while sentence.count(': :') >0:
-            sentence = sentence.replace(': :', ':')
-        sentence = sentence.replace('! ?', '? !')
-
-        sentence = sentence.replace(': .', ':')
-        sentence = sentence.replace('? :', ':')
-        sentence = sentence.replace(', :', ':')
-        sentence = sentence.replace('! :', ':')
-        sentence = sentence.replace(': !', ':')
-        sentence = sentence.replace(': ?', ':')
-        sentence = sentence.replace('. :', ':')
-        sentence = sentence.replace(': ,', ':')
-
-        sentence = sentence.replace('! .', '!')
-        sentence = sentence.replace('? .', '?')
-        sentence = sentence.replace(', .', ',')
-        sentence = sentence.replace('. !', '!')
-        sentence = sentence.replace('. ?', '?')
-        sentence = sentence.replace('. ,', ',')
-        sentence = sentence.replace('! ,', '!')
-        sentence = sentence.replace('? ,', '?')
-        sentence = sentence.replace(', !', '!')
-        sentence = sentence.replace(', ?', '?')
-        sentence = sentence.strip()
+    def _preprocess_sentence(self, sentence: str) -> str:
+        sentence = preprocess_sentence(sentence=sentence, lang=self.lang)
         self._count_fre(sentence)
         return sentence
 
