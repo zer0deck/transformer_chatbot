@@ -136,5 +136,5 @@ class ContextClassificator():
         Returns:
             predicted_class: str
         """
-        rez = tf.argmax(self.model.predict(tf.constant([sentence])), axis=1)
+        rez = tf.argmax(self.model.predict(tf.constant([sentence]), verbose=0), axis=1)
         return CLASSES[rez.numpy()[0]]

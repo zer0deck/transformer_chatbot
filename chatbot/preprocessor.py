@@ -173,16 +173,24 @@ class Corpus():
         return sentence
 
     def _tokenize_and_filter(self):
-        tokenized_inputs, tokenized_outputs = [], []
-        for (sentence1, sentence2) in zip(self._questions, self._answers):
+        tokenized_inputs, tokenized_outputs, tokenized_context, tokenized_emotions = [], [], [], []
+        for (sentence1, sentence2, emotion, context) in zip(self._questions, self._answers, self._emotions, self._context):
             sentence1 = self._start_token + self._tokenizer.encode(sentence1) + self._end_token
             sentence2 = self._start_token + self._tokenizer.encode(sentence2) + self._end_token
+            emotion = self._tokenizer.encode(emotion)
+            context = self._tokenizer.encode(context)
             if len(sentence1) <= self.max_length and len(sentence2) <= self.max_length:
                 self._sent_len.append(len(sentence1))
                 tokenized_inputs.append(sentence1)
+                tokenized_context.append(context)
+                tokenized_emotions.append(emotion)
                 tokenized_outputs.append(sentence2)
         self._questions = tf.keras.preprocessing.sequence.pad_sequences(
             tokenized_inputs, maxlen=self.max_length, padding='post')
+        self._context = tf.keras.preprocessing.sequence.pad_sequences(
+            tokenized_context, maxlen=1, padding='post')
+        self._emotions = tf.keras.preprocessing.sequence.pad_sequences(
+            tokenized_emotions, maxlen=1, padding='post')
         self._answers = tf.keras.preprocessing.sequence.pad_sequences(
             tokenized_outputs, maxlen=self.max_length, padding='post')
 
@@ -200,6 +208,8 @@ class Corpus():
         self.dataset = self.dataset.shuffle(self.buffer_size)
         self.dataset = self.dataset.batch(self.batch_size)
         self.dataset = self.dataset.prefetch(tf.data.experimental.AUTOTUNE)
+        self.fre = round(self._fre_full / len(self._fre_full), 3)
+        self.av_sent_len = round(self._sent_len / len(self._sent_len), 3)
 
     def save(self, path: str = None):
         """Function to save current created instance
