@@ -15,8 +15,6 @@ import tensorflow as tf
 import tensorflow_ranking as tfr
 import pandas as pd
 from chatbot.preprocessor import Corpus, preprocess_sentence
-from chatbot.context_classificator import ContextClassificator
-
 
 
 assert tf.__version__.startswith('2')
@@ -155,7 +153,7 @@ class Transformer():
     d_model: int = field(default=512, init=False, repr=True)
     lang: str = field(default="en", init=True, repr=True)
     max_length: int = field(default=40, init=True, repr=True)
-    batch_size: int = field(default=64, init=True, repr=True)
+    batch_size: int = field(default=32, init=True, repr=True)
     buffer_size: int = field(default=20000, init=True, repr=True)
     optimizer: str = field(default='Adam', init=True, repr=True)
     learning_rate_shedule: tf.keras.optimizers.schedules.LearningRateSchedule = field(default=None, init=True, repr=True)
@@ -166,7 +164,9 @@ class Transformer():
     _momentum: float = field(default=0, init=True, repr=False)
     _data_controller: Corpus = field(default_factory=Corpus, init=False, repr=False)
     _model: tf.keras.Model = field(default_factory=tf.keras.Model, init=False, repr=False)
-    _context_classificator: ContextClassificator = field(default_factory=ContextClassificator, init=False, repr=False)
+    _context_classificator: tf.keras.Model = field(default=None, init=True, repr=False)
+    _emotion_classificator: tf.keras.Model = field(default=None, init=True, repr=False)
+    _classificators_loaded: bool = field(default=False, init=False, repr=True)
     history: tf.keras.callbacks.History = field(default_factory=tf.keras.callbacks.History, init=False, repr=False)
 
     def __post_init__(self):
@@ -177,6 +177,8 @@ class Transformer():
             self._optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate_shedule, beta_1=self._beta_1, beta_2=self._beta_2, epsilon=self._epsilon)
         elif self.optimizer == 'SGD':
             self._optimizer = tf.keras.optimizers.SGD(learning_rate=self.learning_rate_shedule, momentum=self._momentum)
+        if self._context_classificator or self._emotion_classificator:
+            self._classificators_loaded = True
 
     def _count_accuracy(self, y_true, y_pred):
         y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
@@ -303,7 +305,31 @@ class Transformer():
         return tf.maximum(look_ahead_mask, padding_mask)
 # pylint: enable = [invalid-name]
 
-    def fit(self, data: pd.DataFrame = None, path: str = None):
+    def _train_emo(self, num_classes:int = 8, num_epochs: int = 2):
+        self._emotion_classificator = tf.keras.Sequential()
+        self._emotion_classificator.add(tf.keras.layers.Embedding(self._data_controller._vocab_size, 200))
+        self._emotion_classificator.add(tf.keras.layers.LSTM(128))
+        self._emotion_classificator.add(tf.keras.layers.Dropout(0.2))
+        self._emotion_classificator.add(tf.keras.layers.Dense(32, activation = 'relu'))
+        self._emotion_classificator.add(tf.keras.layers.Dropout(0.2))
+        self._emotion_classificator.add(tf.keras.layers.Dense(num_classes, activation='sigmoid'))
+        self._emotion_classificator.compile(optimizer='adam', loss="categorical_crossentropy", metrics=['AUC', 'Recall', 'Precision', 'accuracy'])
+        self._emotion_classificator.fit(self._data_controller.emo_df, epochs=num_epochs)
+        self._emotion_classificator.save('trained_models/emotion_detector', overwrite=True)
+
+    def _train_context(self, num_classes:int = 9, num_epochs: int = 2):
+        self._context_classificator = tf.keras.Sequential()
+        self._context_classificator.add(tf.keras.layers.Embedding(self._data_controller._vocab_size, 200))
+        self._context_classificator.add(tf.keras.layers.LSTM(128))
+        self._context_classificator.add(tf.keras.layers.Dropout(0.2))
+        self._context_classificator.add(tf.keras.layers.Dense(32, activation = 'relu'))
+        self._context_classificator.add(tf.keras.layers.Dropout(0.2))
+        self._context_classificator.add(tf.keras.layers.Dense(num_classes, activation='sigmoid'))
+        self._context_classificator.compile(optimizer='adam', loss="categorical_crossentropy", metrics=['AUC', 'Recall', 'Precision', 'accuracy'])
+        self._context_classificator.fit(self._data_controller.cont_df, epochs=num_epochs)
+        self._context_classificator.save('trained_models/classificator', overwrite=True)
+
+    def fit_data(self, data: pd.DataFrame = None, path: str = None):
         """Training function
         """
         assert data is not None or path is not None
@@ -321,6 +347,20 @@ class Transformer():
             self._data_controller.load(path=path)
         print(f"Data loaded with hyperparams: {self._data_controller}.")
 
+    def train_classificators(self):
+        """...
+        """
+        self._train_emo()
+        del self._emotion_classificator
+        del self._data_controller.emo_df
+        self._train_context()
+        del self._context_classificator
+        del self._data_controller.cont_df
+
+    def compile_model(self):
+        """Training function
+        """
+        tf.keras.backend.clear_session()
         input1 = tf.keras.Input(shape=(None,), name="input1")
         input2 = tf.keras.Input(shape=(None,), name="input2")
         input3 = tf.keras.Input(shape=(None,), name="input3")
@@ -343,25 +383,25 @@ class Transformer():
         self.history = self._model.fit(self._data_controller.dataset, epochs=self.num_epoch)
         return self.history.history
 
-    def load(self, path:str, path_classificator, path_meta):
+    def load(self, path:str, path_meta:str, path_classificator: str = 'trained_models/classificator', path_emotion_detector:str = 'trained_models/emotion_detector'):
         '''
         Function to initialize model with loading
         '''
-        with open(f'{path_meta}/metadata.info', 'r', encoding='utf-8') as file:
-            temp_d = json.load(file)
+        # with open(f'{path_meta}/metadata.info', 'r', encoding='utf-8') as file:
+        #     temp_d = json.load(file)
         # self.num_layers = temp_d['num_layers']
         # self.num_heads = temp_d['num_heads']
         # self.num_epoch = temp_d['num_epoch']
         # self.units = temp_d['units']
         # self.treshold = temp_d['treshold']
         # self.d_model = temp_d['d_model']
-        # self.lang = temp_d['lang']
-        self.max_length = temp_d['max_sent_len']
-        self.batch_size = temp_d['batch_size']
-        self.buffer_size = temp_d['buffer_size']
+        # # self.lang = temp_d['lang']
+        # self.max_length = temp_d['max_sent_len']
+        # self.batch_size = temp_d['batch_size']
+        # self.buffer_size = temp_d['buffer_size']
         self._data_controller = Corpus(lang=self.lang, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
-        self._data_controller.fre = temp_d['FRE']
-        self._data_controller.av_sent_len = temp_d['average_sentence_length']
+        # self._data_controller.fre = temp_d['FRE']
+        # self._data_controller.av_sent_len = temp_d['average_sentence_length']
         self._data_controller.load(path=path_meta)
         self._model = tf.keras.models.load_model(path, custom_objects={'StepBasedShedule': StepBasedShedule,
                                                                         'MultiHeadAttention': MultiHeadAttention, 
@@ -373,20 +413,59 @@ class Transformer():
                                                                         '_count_accuracy': self._count_accuracy, 
                                                                         '_count_f1': self._count_f1})
         self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
-        self._context_classificator.load(path_classificator)
+        if not self._classificators_loaded:
+            self._context_classificator = tf.keras.models.load_model(path_classificator)
+            self._emotion_classificator = tf.keras.models.load_model(path_emotion_detector)
+            self._classificators_loaded = True
+        with open(f'{path}/emo_encoder.json', 'r', encoding='utf8') as file_object:
+            self._data_controller.emo_encoder = json.load(file_object)
+        with open(f'{path}/cont_encoder.json', 'r', encoding='utf8') as file_object:
+            self._data_controller.cont_encoder = json.load(file_object)
 
     def save_to_folder(self, path:str = None):
         """Saves model to folder
         """
         self._model.save(f"{path}/", overwrite=True, include_optimizer=False)
+        with open(f'{path}/cont_encoder.json', 'w', encoding='utf8') as file_object:
+            json.dump({int(k): int(v) for (k, v) in self._data_controller.cont_encoder.items()}, file_object)
+        with open(f'{path}/emo_encoder.json', 'w', encoding='utf8') as file_object:
+            json.dump({int(k): int(v) for (k, v) in self._data_controller.emo_encoder.items()}, file_object)
 
 # pylint: disable = [missing-function-docstring, unexpected-keyword-arg, unsubscriptable-object]
-    def evaluate(self, sentence: str, classificator_path:str = 'trained_models'):
+    def evaluate(self, sentence: str, classificator_path:str = 'trained_models/classificator', emotion_detector_path: str = 'trained_models/emotion_detector'):
 
         sentence = tf.expand_dims(self._data_controller._start_token + self._data_controller._tokenizer.encode(sentence) + self._data_controller._end_token, axis=0)
-        if not self._context_classificator._is_loaded: self._context_classificator.load(classificator_path)
-        tag = tf.expand_dims(self._context_classificator.predict(sentence), axis=0)
-        emote = None
+        if not self._classificators_loaded:
+            self._context_classificator = tf.keras.models.load_model(classificator_path)
+            self._emotion_classificator = tf.keras.models.load_model(emotion_detector_path)
+        tag = tf.expand_dims(
+            int(list(self._data_controller.cont_encoder.keys())[
+                list(self._data_controller.cont_encoder.values())
+                .index(tf.argmax(
+                        self._context_classificator.predict(
+                            tf.constant(sentence),
+                            verbose=0
+                        ),
+                        axis=1
+                    ).numpy()[0]
+                )
+            ]),
+            axis=0
+        )
+        emote = tf.expand_dims(
+            int(list(self._data_controller.emo_encoder.keys())[
+                list(self._data_controller.emo_encoder.values())
+                .index(tf.argmax(
+                        self._context_classificator.predict(
+                            tf.constant(sentence),
+                            verbose=0
+                        ),
+                        axis=1
+                    ).numpy()[0]
+                )
+            ]),
+            axis=0
+        )
         output = tf.expand_dims(self._data_controller._start_token, 0)
 
         for _ in range(self.max_length):

@@ -125,6 +125,10 @@ class Corpus():
     _fre_full: list = field(default_factory=list, init=False, repr=False)
     fre: float = field(default=0.0, init=False, repr=True)
     av_sent_len: float = field(default=0.0, init=False, repr=True)
+    emo_df: tf.data.Dataset = field(default_factory=list, init=False, repr=False)
+    cont_df: tf.data.Dataset = field(default_factory=list, init=False, repr=False)
+    emo_encoder: dict = field(default=None, init=False, repr=False)
+    cont_encoder: dict = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.corpus.empty:
@@ -140,7 +144,10 @@ class Corpus():
         self._answers = [self._preprocess_sentence(sent) for sent in self.corpus.iloc[:, 1].to_list()]
         self._emotions = [self._preprocess_sentence(sent) for sent in self.corpus.iloc[:, 2].to_list()]
         self._context = [self._preprocess_sentence(sent) for sent in self.corpus.iloc[:, 3].to_list()]
-        self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.build_from_corpus(self._questions + self._answers + self._emotions + self._context, target_vocab_size=2**16)
+        try:
+            self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file('trained_models/tokenizer.tf')
+        except:
+            self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.build_from_corpus(self._questions + self._answers + self._emotions + self._context, target_vocab_size=2**16)
         self._start_token, self._end_token = [self._tokenizer.vocab_size], [self._tokenizer.vocab_size + 1]
         self._vocab_size = self._tokenizer.vocab_size + 2
         self._tokenize_and_filter()
@@ -203,13 +210,36 @@ class Corpus():
                 'input3': self._context,
                 'dec_inputs': self._answers[:, :-1]
             },
-            {'outputs': self._answers[:, 1:]},))
+            {
+                'outputs': self._answers[:, 1:]
+            },))
+        self.emo_encoder = {k: v for (k, v) in zip(set([x[0] for x in self._emotions]), [x for x in range(len(self.corpus.emotion.unique()))])}
+        self.cont_encoder = {k: v for (k, v) in zip(set([x[0] for x in self._context]), [x for x in range(len(self.corpus.category.unique()))])}
+        self.fre = round(sum(self._fre_full) / len(self._fre_full), 3)
+        self.av_sent_len = round(sum(self._sent_len) / len(self._sent_len), 3)
+        temp_emo = [self.emo_encoder[x[0]] for x in self._emotions]
+        temp_cont = [self.cont_encoder[x[0]] for x in self._context]
+        self.emo_df = tf.data.Dataset.from_tensor_slices((
+            {'embedding_input': self._questions,},
+            {'dense_1': tf.one_hot(temp_emo, len(self.emo_encoder.keys()))},))
+        self.cont_df = tf.data.Dataset.from_tensor_slices((
+            {'embedding_1_input': self._questions,},
+            {'dense_3': tf.one_hot(temp_cont, len(self.cont_encoder.keys()))},))
+
         self.dataset = self.dataset.cache()
         self.dataset = self.dataset.shuffle(self.buffer_size)
         self.dataset = self.dataset.batch(self.batch_size)
         self.dataset = self.dataset.prefetch(tf.data.experimental.AUTOTUNE)
-        self.fre = round(self._fre_full / len(self._fre_full), 3)
-        self.av_sent_len = round(self._sent_len / len(self._sent_len), 3)
+
+        self.emo_df = self.emo_df.cache()
+        self.emo_df = self.emo_df.shuffle(self.buffer_size)
+        self.emo_df = self.emo_df.batch(self.batch_size)
+        self.emo_df = self.emo_df.prefetch(tf.data.experimental.AUTOTUNE)
+
+        self.cont_df = self.cont_df.cache()
+        self.cont_df = self.cont_df.shuffle(self.buffer_size)
+        self.cont_df = self.cont_df.batch(self.batch_size)
+        self.cont_df = self.cont_df.prefetch(tf.data.experimental.AUTOTUNE)
 
     def save(self, path: str = None):
         """Function to save current created instance
@@ -231,6 +261,6 @@ class Corpus():
         """Function to load presaved instance
         """
         self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file(f'{path}/tokenizer.tf')
-        self.dataset = tf.data.Dataset.load(path=f"{path}/tfds", compression='GZIP')
+        # self.dataset = tf.data.Dataset.load(path=f"{path}/tfds", compression='GZIP')
         self._start_token, self._end_token = [self._tokenizer.vocab_size], [self._tokenizer.vocab_size + 1]
         self._vocab_size = self._tokenizer.vocab_size + 2
