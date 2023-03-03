@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 import tensorflow as tf
 import tensorflow_ranking as tfr
 import pandas as pd
+import numpy as np
 from chatbot.preprocessor import Corpus, preprocess_sentence
 
 
@@ -168,6 +169,7 @@ class Transformer():
     _emotion_classificator: tf.keras.Model = field(default=None, init=True, repr=False)
     _classificators_loaded: bool = field(default=False, init=False, repr=True)
     history: tf.keras.callbacks.History = field(default_factory=tf.keras.callbacks.History, init=False, repr=False)
+    mrr: tf.Variable = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         tf.keras.backend.clear_session()
@@ -187,12 +189,10 @@ class Transformer():
     def _count_f1(self, y_true: tf.Tensor, y_pred: tf.Tensor):
         y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
         depth = y_pred._shape_as_list()[2]
-        # y_pred = tf.math.argmax(y_pred, axis=-1,  output_type=tf.dtypes.int32)
+        y_pred = tf.math.argmax(y_pred, axis=-1,  output_type=tf.dtypes.int32)
         y_true = tf.cast(y_true, dtype=tf.dtypes.int32)
-        # y_pred = tf.one_hot(y_pred, depth=depth)
+        y_pred = tf.one_hot(y_pred, depth=depth)
         y_true = tf.one_hot(y_true, depth=depth)
-        y_true = tf.cast(y_true, dtype=tf.dtypes.float32)
-        # y_pred = tf.math.l2_normalize(y_pred, axis=1)
         true_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_true * y_pred, 0, 1)))
         possible_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_true, 0, 1)))
         predicted_positives = tf.keras.backend.sum(tf.keras.backend.round(tf.keras.backend.clip(y_pred, 0, 1)))
@@ -202,14 +202,21 @@ class Transformer():
         return f1_score
 
     def _count_mrr(self, y_true: tf.Tensor, y_pred: tf.Tensor):
-        y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
-        depth = y_pred._shape_as_list()[2]
+        y_true = tf.reshape(y_true, shape=(1, self.max_length - 1))
+        y_pred = tf.reshape(y_pred, shape=(1, self.max_length - 1, self._data_controller._vocab_size))
         y_true = tf.cast(y_true, dtype=tf.dtypes.int32)
-        y_true = tf.one_hot(y_true, depth=depth)
-        y_true = tf.cast(y_true, dtype=tf.dtypes.float32)
-        mrr = tfr.keras.metrics.MRRMetric()
+        y_true = tf.squeeze(y_true)
+        y_pred = tf.squeeze(y_pred)
+        
+        y_true = tf.reshape(y_true, shape=(1248, 1))
 
-        return mrr(y_true, y_pred)
+        y_pred = tf.math.top_k(y_pred, self._data_controller._vocab_size).indices
+        where_tensor = tf.equal(y_pred, y_true)
+        where_tensor = tf.where(where_tensor)[:, 1]
+        where_tensor = tf.cast(tf.add(where_tensor, 1), dtype=tf.dtypes.float64)
+        where_tensor = tf.divide(tf.constant(np.ones(self.max_length - 1)), where_tensor)
+        return tf.math.reduce_mean(where_tensor)
+
 
     def _count_loss(self, y_true, y_pred):
         y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
@@ -305,7 +312,7 @@ class Transformer():
         return tf.maximum(look_ahead_mask, padding_mask)
 # pylint: enable = [invalid-name]
 
-    def _train_emo(self, num_classes:int = 8, num_epochs: int = 2):
+    def _train_emo(self, num_classes:int = 8, num_epochs: int = 5):
         self._emotion_classificator = tf.keras.Sequential()
         self._emotion_classificator.add(tf.keras.layers.Embedding(self._data_controller._vocab_size, 200))
         self._emotion_classificator.add(tf.keras.layers.LSTM(128))
@@ -317,7 +324,7 @@ class Transformer():
         self._emotion_classificator.fit(self._data_controller.emo_df, epochs=num_epochs)
         self._emotion_classificator.save('trained_models/emotion_detector', overwrite=True)
 
-    def _train_context(self, num_classes:int = 9, num_epochs: int = 2):
+    def _train_context(self, num_classes:int = 9, num_epochs: int = 5):
         self._context_classificator = tf.keras.Sequential()
         self._context_classificator.add(tf.keras.layers.Embedding(self._data_controller._vocab_size, 200))
         self._context_classificator.add(tf.keras.layers.LSTM(128))
@@ -365,7 +372,7 @@ class Transformer():
         input2 = tf.keras.Input(shape=(None,), name="input2")
         input3 = tf.keras.Input(shape=(None,), name="input3")
         dec_inputs = tf.keras.Input(shape=(None,), name="dec_inputs")
-
+        self.mrr = tfr.keras.metrics.MRRMetric()
         enc_padding_mask = tf.keras.layers.Lambda(self.create_padding_mask, output_shape=(1, 1, None), name='enc_padding_mask')(input1)
         # mask the future tokens for decoder inputs at the 1st attention block
         look_ahead_mask = tf.keras.layers.Lambda(self.create_look_ahead_mask, output_shape=(1, None, None), name='look_ahead_mask')(dec_inputs)
@@ -377,10 +384,30 @@ class Transformer():
         outputs = tf.keras.layers.Dense(units=self._data_controller._vocab_size, name="outputs")(dec_outputs)
 
         self._model = tf.keras.Model(inputs=[input1, input2, input3, dec_inputs], outputs=outputs, name="transformer")
-        self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
+        self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1, self._count_mrr])
+
+
+        # CHECKPOINT MANAGER:
+
+        checkpoint = tf.keras.callbacks.ModelCheckpoint(
+            filepath='trained_models/checkpoints',
+            save_best_only=True,
+            monitor='_count_accuracy'
+            )
+        stop_early = tf.keras.callbacks.EarlyStopping(
+            monitor='_count_accuracy',
+            min_delta=0.05,
+            patience=5,
+            verbose=1
+            )
+
 
         print(f"{self._model} compiled successfully.")
-        self.history = self._model.fit(self._data_controller.dataset, epochs=self.num_epoch)
+        self.history = self._model.fit(
+            self._data_controller.dataset,
+            epochs=self.num_epoch,
+            callbacks=[stop_early, checkpoint]
+            )
         return self.history.history
 
     def load(self, path:str, path_meta:str, path_classificator: str = 'trained_models/classificator', path_emotion_detector:str = 'trained_models/emotion_detector'):
