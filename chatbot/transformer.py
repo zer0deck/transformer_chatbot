@@ -12,7 +12,6 @@ The module contains:
 import json
 from dataclasses import dataclass, field
 import tensorflow as tf
-import tensorflow_ranking as tfr
 import pandas as pd
 import numpy as np
 from chatbot.preprocessor import Corpus, preprocess_sentence
@@ -202,21 +201,15 @@ class Transformer():
         return f1_score
 
     def _count_mrr(self, y_true: tf.Tensor, y_pred: tf.Tensor):
-        y_true = tf.reshape(y_true, shape=(1, self.max_length - 1))
-        y_pred = tf.reshape(y_pred, shape=(1, self.max_length - 1, self._data_controller._vocab_size))
+        y_true = tf.reshape(y_true, shape=(-1, 1))
+        y_pred = tf.reshape(y_pred, shape=(-1, self._data_controller._vocab_size))
+        y_pred = tf.math.top_k(y_pred, k=self._data_controller._vocab_size).indices
         y_true = tf.cast(y_true, dtype=tf.dtypes.int32)
-        y_true = tf.squeeze(y_true)
-        y_pred = tf.squeeze(y_pred)
-        
-        y_true = tf.reshape(y_true, shape=(1248, 1))
-
-        y_pred = tf.math.top_k(y_pred, self._data_controller._vocab_size).indices
-        where_tensor = tf.equal(y_pred, y_true)
+        where_tensor = tf.equal(y_true,y_pred)
         where_tensor = tf.where(where_tensor)[:, 1]
         where_tensor = tf.cast(tf.add(where_tensor, 1), dtype=tf.dtypes.float64)
-        where_tensor = tf.divide(tf.constant(np.ones(self.max_length - 1)), where_tensor)
+        where_tensor = tf.divide(tf.constant(np.ones(where_tensor._shape_as_list()[0])), where_tensor)
         return tf.math.reduce_mean(where_tensor)
-
 
     def _count_loss(self, y_true, y_pred):
         y_true = tf.reshape(y_true, shape=(-1, self.max_length - 1))
@@ -354,13 +347,13 @@ class Transformer():
             self._data_controller.load(path=path)
         print(f"Data loaded with hyperparams: {self._data_controller}.")
 
-    def train_classificators(self):
+    def train_classificators(self, num_ep: int = 5):
         """...
         """
-        self._train_emo()
+        self._train_emo(num_epochs=num_ep)
         del self._emotion_classificator
         del self._data_controller.emo_df
-        self._train_context()
+        self._train_context(num_epochs=num_ep)
         del self._context_classificator
         del self._data_controller.cont_df
 
@@ -372,7 +365,6 @@ class Transformer():
         input2 = tf.keras.Input(shape=(None,), name="input2")
         input3 = tf.keras.Input(shape=(None,), name="input3")
         dec_inputs = tf.keras.Input(shape=(None,), name="dec_inputs")
-        self.mrr = tfr.keras.metrics.MRRMetric()
         enc_padding_mask = tf.keras.layers.Lambda(self.create_padding_mask, output_shape=(1, 1, None), name='enc_padding_mask')(input1)
         # mask the future tokens for decoder inputs at the 1st attention block
         look_ahead_mask = tf.keras.layers.Lambda(self.create_look_ahead_mask, output_shape=(1, None, None), name='look_ahead_mask')(dec_inputs)
