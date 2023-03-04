@@ -3,7 +3,5 @@ temp/
 Diploma.docx
 ~$iploma.docx
 test.ipynb
-variables.data-00000-of-00001
 *.psd
-trained_models/*/
 glove.*
