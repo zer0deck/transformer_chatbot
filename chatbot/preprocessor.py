@@ -151,7 +151,6 @@ class Corpus():
         self._start_token, self._end_token = [self._tokenizer.vocab_size], [self._tokenizer.vocab_size + 1]
         self._vocab_size = self._tokenizer.vocab_size + 2
         self._tokenize_and_filter()
-        self._create_dataset()
 
     def _count_fre(self, sentence:str):
         sentence = re.sub(", ", '', sentence)
@@ -201,6 +200,27 @@ class Corpus():
         self._answers = tf.keras.preprocessing.sequence.pad_sequences(
             tokenized_outputs, maxlen=self.max_length, padding='post')
 
+    def _create_class_dataset(self):
+        self.emo_encoder = {k: v for (k, v) in zip(set([x[0] for x in self._emotions]), [x for x in range(len(self.corpus.emotion.unique()))])}
+        self.cont_encoder = {k: v for (k, v) in zip(set([x[0] for x in self._context]), [x for x in range(len(self.corpus.category.unique()))])}
+        temp_emo = [self.emo_encoder[x[0]] for x in self._emotions]
+        temp_cont = [self.cont_encoder[x[0]] for x in self._context]
+        self.emo_df = tf.data.Dataset.from_tensor_slices((
+            {'embedding_input': self._questions,},
+            {'dense_1': tf.one_hot(temp_emo, len(self.emo_encoder.keys()))},))
+        self.cont_df = tf.data.Dataset.from_tensor_slices((
+            {'embedding_1_input': self._questions,},
+            {'dense_3': tf.one_hot(temp_cont, len(self.cont_encoder.keys()))},))
+        self.emo_df = self.emo_df.cache()
+        self.emo_df = self.emo_df.shuffle(self.buffer_size)
+        self.emo_df = self.emo_df.batch(self.batch_size)
+        self.emo_df = self.emo_df.prefetch(tf.data.experimental.AUTOTUNE)
+
+        self.cont_df = self.cont_df.cache()
+        self.cont_df = self.cont_df.shuffle(self.buffer_size)
+        self.cont_df = self.cont_df.batch(self.batch_size)
+        self.cont_df = self.cont_df.prefetch(tf.data.experimental.AUTOTUNE)
+
     def _create_dataset(self):
         # pylint: disable=invalid-sequence-index
         self.dataset = tf.data.Dataset.from_tensor_slices((
@@ -213,33 +233,13 @@ class Corpus():
             {
                 'outputs': self._answers[:, 1:]
             },))
-        self.emo_encoder = {k: v for (k, v) in zip(set([x[0] for x in self._emotions]), [x for x in range(len(self.corpus.emotion.unique()))])}
-        self.cont_encoder = {k: v for (k, v) in zip(set([x[0] for x in self._context]), [x for x in range(len(self.corpus.category.unique()))])}
         self.fre = round(sum(self._fre_full) / len(self._fre_full), 3)
         self.av_sent_len = round(sum(self._sent_len) / len(self._sent_len), 3)
-        temp_emo = [self.emo_encoder[x[0]] for x in self._emotions]
-        temp_cont = [self.cont_encoder[x[0]] for x in self._context]
-        self.emo_df = tf.data.Dataset.from_tensor_slices((
-            {'embedding_input': self._questions,},
-            {'dense_1': tf.one_hot(temp_emo, len(self.emo_encoder.keys()))},))
-        self.cont_df = tf.data.Dataset.from_tensor_slices((
-            {'embedding_1_input': self._questions,},
-            {'dense_3': tf.one_hot(temp_cont, len(self.cont_encoder.keys()))},))
 
         self.dataset = self.dataset.cache()
         self.dataset = self.dataset.shuffle(self.buffer_size)
         self.dataset = self.dataset.batch(self.batch_size)
         self.dataset = self.dataset.prefetch(tf.data.experimental.AUTOTUNE)
-
-        self.emo_df = self.emo_df.cache()
-        self.emo_df = self.emo_df.shuffle(self.buffer_size)
-        self.emo_df = self.emo_df.batch(self.batch_size)
-        self.emo_df = self.emo_df.prefetch(tf.data.experimental.AUTOTUNE)
-
-        self.cont_df = self.cont_df.cache()
-        self.cont_df = self.cont_df.shuffle(self.buffer_size)
-        self.cont_df = self.cont_df.batch(self.batch_size)
-        self.cont_df = self.cont_df.prefetch(tf.data.experimental.AUTOTUNE)
 
     def save(self, path: str = None):
         """Function to save current created instance

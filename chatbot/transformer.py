@@ -350,6 +350,7 @@ class Transformer():
     def train_classificators(self, num_ep: int = 5):
         """...
         """
+        self._data_controller._create_class_dataset()
         self._train_emo(num_epochs=num_ep)
         del self._emotion_classificator
         del self._data_controller.emo_df
@@ -360,6 +361,7 @@ class Transformer():
     def compile_model(self):
         """Training function
         """
+        self._data_controller._create_dataset()
         tf.keras.backend.clear_session()
         input1 = tf.keras.Input(shape=(None,), name="input1")
         input2 = tf.keras.Input(shape=(None,), name="input2")
