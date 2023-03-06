@@ -9,6 +9,9 @@ The module contains:
     3. Step-based shedule
     4. Transformer model
 """
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # or any {'0', '1', '2'}
+
 import json
 from dataclasses import dataclass, field
 import tensorflow as tf
@@ -20,6 +23,7 @@ from chatbot.preprocessor import Corpus, preprocess_sentence
 assert tf.__version__.startswith('2')
 tf.random.set_seed(42)
 
+@tf.keras.utils.register_keras_serializable()
 class MultiHeadAttention(tf.keras.layers.Layer):
     """Realization of [Multi-Head Attention algorithm](https://arxiv.org/abs/1706.03762v5)
 
@@ -111,7 +115,9 @@ class StepBasedShedule(tf.keras.optimizers.schedules.LearningRateSchedule):
         self.warmup_steps = warmup_steps
 
     def __call__(self, step):
-        arg1, arg2 = tf.math.rsqrt(step),  step * (self.warmup_steps**-1.5)
+        step = tf.cast(step, dtype=tf.float32)
+        arg1 = tf.math.rsqrt(step)
+        arg2 = step * (self.warmup_steps**-1.5)
         return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
 
     def get_config(self):
@@ -145,14 +151,14 @@ class PositionalEncoding(tf.keras.layers.Layer):
 class Transformer():
     """Main transformer class
     """
-    num_layers: int = field(default=6, init=True, repr=True)
+    num_layers: int = field(default=4, init=True, repr=True)
     num_heads: int = field(default=8, init=True, repr=True)
     num_epoch: int = field(default=1, init=True, repr=True)
-    units: int = field(default=2048, init=True, repr=True)
+    units: int = field(default=512, init=True, repr=True)
     treshold: float = field(default=0.1, init=True, repr=True)
-    d_model: int = field(default=512, init=False, repr=True)
+    d_model: int = field(default=256, init=False, repr=True)
     lang: str = field(default="en", init=True, repr=True)
-    max_length: int = field(default=40, init=True, repr=True)
+    max_length: int = field(default=30, init=True, repr=True)
     batch_size: int = field(default=32, init=True, repr=True)
     buffer_size: int = field(default=20000, init=True, repr=True)
     optimizer: str = field(default='Adam', init=True, repr=True)
@@ -329,23 +335,10 @@ class Transformer():
         self._context_classificator.fit(self._data_controller.cont_df, epochs=num_epochs)
         self._context_classificator.save('trained_models/classificator', overwrite=True)
 
-    def fit_data(self, data: pd.DataFrame = None, path: str = None):
+    def fit_data(self, data: pd.DataFrame):
         """Training function
         """
-        assert data is not None or path is not None
-        if data is not None:
-            self._data_controller = Corpus(lang=self.lang, corpus=data, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
-        else:
-            with open(f'{path}/metadata.info', 'r', encoding='utf-8') as file:
-                temp_d = json.load(file)
-            self.max_length = temp_d['max_sent_len']
-            self.batch_size = temp_d['batch_size']
-            self.buffer_size = temp_d['buffer_size']
-            self._data_controller = Corpus(lang=self.lang, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
-            self._data_controller.fre = temp_d['FRE']
-            self._data_controller.av_sent_len = temp_d['average_sentence_length']
-            self._data_controller.load(path=path)
-        print(f"Data loaded with hyperparams: {self._data_controller}.")
+        self._data_controller = Corpus(lang=self.lang, corpus=data, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
 
     def train_classificators(self, num_ep: int = 5):
         """...
@@ -357,11 +350,16 @@ class Transformer():
         self._train_context(num_epochs=num_ep)
         del self._context_classificator
         del self._data_controller.cont_df
+        with open('trained_models/cont_encoder.json', 'w', encoding='utf8') as file_object:
+            json.dump({int(k): int(v) for (k, v) in self._data_controller.cont_encoder.items()}, file_object)
+        with open('trained_models/emo_encoder.json', 'w', encoding='utf8') as file_object:
+            json.dump({int(k): int(v) for (k, v) in self._data_controller.emo_encoder.items()}, file_object)
 
     def compile_model(self):
         """Training function
         """
         self._data_controller._create_dataset()
+        print(f"Data loaded with hyperparams: {self._data_controller}.")
         tf.keras.backend.clear_session()
         input1 = tf.keras.Input(shape=(None,), name="input1")
         input2 = tf.keras.Input(shape=(None,), name="input2")
@@ -379,18 +377,20 @@ class Transformer():
 
         self._model = tf.keras.Model(inputs=[input1, input2, input3, dec_inputs], outputs=outputs, name="transformer")
         self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1, self._count_mrr])
+        # self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
 
 
         # CHECKPOINT MANAGER:
 
-        checkpoint = tf.keras.callbacks.ModelCheckpoint(
-            filepath='trained_models/checkpoints',
-            save_best_only=True,
-            monitor='_count_accuracy'
+        checkpoint = tf.keras.callbacks.BackupAndRestore(
+            'trained_models/checkpoints',
+            save_freq='epoch',
+            delete_checkpoint=False
             )
         stop_early = tf.keras.callbacks.EarlyStopping(
             monitor='_count_accuracy',
-            min_delta=0.05,
+            min_delta=0.002,
+            mode="max",
             patience=5,
             verbose=1
             )
@@ -400,57 +400,10 @@ class Transformer():
         self.history = self._model.fit(
             self._data_controller.dataset,
             epochs=self.num_epoch,
-            callbacks=[stop_early, checkpoint]
+            verbose=1,
+            callbacks=[checkpoint, stop_early]
             )
         return self.history.history
-
-    def load(self, path:str, path_meta:str, path_classificator: str = 'trained_models/classificator', path_emotion_detector:str = 'trained_models/emotion_detector'):
-        '''
-        Function to initialize model with loading
-        '''
-        # with open(f'{path_meta}/metadata.info', 'r', encoding='utf-8') as file:
-        #     temp_d = json.load(file)
-        # self.num_layers = temp_d['num_layers']
-        # self.num_heads = temp_d['num_heads']
-        # self.num_epoch = temp_d['num_epoch']
-        # self.units = temp_d['units']
-        # self.treshold = temp_d['treshold']
-        # self.d_model = temp_d['d_model']
-        # # self.lang = temp_d['lang']
-        # self.max_length = temp_d['max_sent_len']
-        # self.batch_size = temp_d['batch_size']
-        # self.buffer_size = temp_d['buffer_size']
-        self._data_controller = Corpus(lang=self.lang, max_length=self.max_length, batch_size=self.batch_size, buffer_size=self.buffer_size)
-        # self._data_controller.fre = temp_d['FRE']
-        # self._data_controller.av_sent_len = temp_d['average_sentence_length']
-        self._data_controller.load(path=path_meta)
-        self._model = tf.keras.models.load_model(path, custom_objects={'StepBasedShedule': StepBasedShedule,
-                                                                        'MultiHeadAttention': MultiHeadAttention, 
-                                                                        'encoder_layer': self._create_encoder_layer, 
-                                                                        'decoder_layer': self._create_decoder_layer, 
-                                                                        'encoder': self.encoder, 'decoder': self.decoder, 
-                                                                        'create_look_ahead_mask': self.create_look_ahead_mask, 
-                                                                        'create_padding_mask': self.create_padding_mask, 
-                                                                        '_count_accuracy': self._count_accuracy, 
-                                                                        '_count_f1': self._count_f1})
-        self._model.compile(optimizer=self._optimizer, loss=self._count_loss, metrics=[self._count_accuracy, self._count_f1])
-        if not self._classificators_loaded:
-            self._context_classificator = tf.keras.models.load_model(path_classificator)
-            self._emotion_classificator = tf.keras.models.load_model(path_emotion_detector)
-            self._classificators_loaded = True
-        with open(f'{path}/emo_encoder.json', 'r', encoding='utf8') as file_object:
-            self._data_controller.emo_encoder = json.load(file_object)
-        with open(f'{path}/cont_encoder.json', 'r', encoding='utf8') as file_object:
-            self._data_controller.cont_encoder = json.load(file_object)
-
-    def save_to_folder(self, path:str = None):
-        """Saves model to folder
-        """
-        self._model.save(f"{path}/", overwrite=True, include_optimizer=False)
-        with open(f'{path}/cont_encoder.json', 'w', encoding='utf8') as file_object:
-            json.dump({int(k): int(v) for (k, v) in self._data_controller.cont_encoder.items()}, file_object)
-        with open(f'{path}/emo_encoder.json', 'w', encoding='utf8') as file_object:
-            json.dump({int(k): int(v) for (k, v) in self._data_controller.emo_encoder.items()}, file_object)
 
 # pylint: disable = [missing-function-docstring, unexpected-keyword-arg, unsubscriptable-object]
     def evaluate(self, sentence: str, classificator_path:str = 'trained_models/classificator', emotion_detector_path: str = 'trained_models/emotion_detector'):
@@ -458,7 +411,9 @@ class Transformer():
         sentence = tf.expand_dims(self._data_controller._start_token + self._data_controller._tokenizer.encode(sentence) + self._data_controller._end_token, axis=0)
         if not self._classificators_loaded:
             self._context_classificator = tf.keras.models.load_model(classificator_path)
+            self._context_classificator.compile(optimizer='adam', loss="categorical_crossentropy", metrics=['AUC', 'Recall', 'Precision', 'accuracy'])
             self._emotion_classificator = tf.keras.models.load_model(emotion_detector_path)
+            self._emotion_classificator.compile(optimizer='adam', loss="categorical_crossentropy", metrics=['AUC', 'Recall', 'Precision', 'accuracy'])
         tag = tf.expand_dims(
             int(list(self._data_controller.cont_encoder.keys())[
                 list(self._data_controller.cont_encoder.values())
@@ -468,7 +423,7 @@ class Transformer():
                             verbose=0
                         ),
                         axis=1
-                    ).numpy()[0]
+                    ).numpy()[0]-1
                 )
             ]),
             axis=0
@@ -482,7 +437,7 @@ class Transformer():
                             verbose=0
                         ),
                         axis=1
-                    ).numpy()[0]
+                    ).numpy()[0]-1
                 )
             ]),
             axis=0
@@ -520,6 +475,10 @@ class Transformer():
         """
         Chat conversation init
         """
+        with open('trained_models/emo_encoder.json', 'r', encoding='utf8') as file_object:
+            self._data_controller.emo_encoder = json.load(file_object)
+        with open('trained_models/cont_encoder.json', 'r', encoding='utf8') as file_object:
+            self._data_controller.cont_encoder = json.load(file_object)
         while True:
             text = input('Введите текст:')
             if text == '0':

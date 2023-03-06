@@ -4,6 +4,7 @@ Warning: Corpus class is frozen @dataclass. Once you create an instance,
 you couldn't change anything from outside the class.
 """
 import re
+import json
 from dataclasses import dataclass, field
 import pandas as pd
 import tensorflow as tf
@@ -80,6 +81,21 @@ def preprocess_sentence(sentence: str, lang:str='en') -> str:
     sentence = sentence.strip()
     return sentence
 
+def _syllable_count(word:str)->int:
+    word = word.lower()
+    count = 0
+    vowels = "aeiouy"
+    if word[0] in vowels:
+        count += 1
+    for index in range(1, len(word)):
+        if word[index] in vowels and word[index - 1] not in vowels:
+            count += 1
+    if word.endswith("e"):
+        count -= 1
+    if count == 0 and word !='.':
+        count += 1
+    return count
+
 @dataclass(frozen=False, kw_only=True, slots=True)
 class Corpus():
     """Is using for locate datasets and text filtering functions.
@@ -132,6 +148,12 @@ class Corpus():
 
     def __post_init__(self) -> None:
         if not self.corpus.empty:
+            try:
+                with open('trained_models/transformer/emo_encoder.json', 'r', encoding='utf8') as file_object:
+                    self.emo_encoder = json.load(file_object)
+                with open('trained_models/transformer/cont_encoder.json', 'r', encoding='utf8') as file_object:
+                    self.cont_encoder = json.load(file_object)
+            except: None
             print(f'{tf.data.Dataset}: Dictionary generation {self}. \n\tPlease be patient. Depending on the size of the dataset and \n\tthe number of unique words, this can take a while (up to 5 minutes).')
             self.corpus.dropna(inplace=True)
             self.create()
@@ -142,8 +164,8 @@ class Corpus():
         # pylint: disable=unsubscriptable-object
         self._questions = [self._preprocess_sentence(sent) for sent in self.corpus.iloc[:, 0].to_list()]
         self._answers = [self._preprocess_sentence(sent) for sent in self.corpus.iloc[:, 1].to_list()]
-        self._emotions = [self._preprocess_sentence(sent) for sent in self.corpus.iloc[:, 2].to_list()]
-        self._context = [self._preprocess_sentence(sent) for sent in self.corpus.iloc[:, 3].to_list()]
+        self._emotions = [self._preprocess_sentence(sent, False) for sent in self.corpus.iloc[:, 2].to_list()]
+        self._context = [self._preprocess_sentence(sent, False) for sent in self.corpus.iloc[:, 3].to_list()]
         try:
             self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file('trained_models/tokenizer.tf')
         except UnicodeDecodeError:
@@ -160,12 +182,12 @@ class Corpus():
         words_c = len([w for w in sentence.split(' ') if w !='.' and w])
         if words_c == 0:
             return None
+        elif words_c >= self.max_length-1: return None
         sentence_c  = len([w for w in sentence.split(' ') if w =='.'])+1
         syllable_c = 0
         if self.lang == 'en':
-            for word in sentence:
-                if word in ('a', 'e', 'i', 'o', 'u'):
-                    syllable_c+=1
+            for word in sentence.split(' '):
+                syllable_c += _syllable_count(word)
             self._fre_full.append(206.835 - 1.015 * (words_c/sentence_c)-84.6*(syllable_c/words_c))
         elif self.lang == 'ru':
             for word in sentence:
@@ -173,9 +195,9 @@ class Corpus():
                     syllable_c+=1
             self._fre_full.append(206.835 - 1.3 * (words_c/sentence_c)-60.1*(syllable_c/words_c))
 
-    def _preprocess_sentence(self, sentence: str) -> str:
+    def _preprocess_sentence(self, sentence: str, check: bool = True) -> str:
         sentence = preprocess_sentence(sentence=sentence, lang=self.lang)
-        self._count_fre(sentence)
+        if check: self._count_fre(sentence)
         return sentence
 
     def _tokenize_and_filter(self):
@@ -233,6 +255,7 @@ class Corpus():
             {
                 'outputs': self._answers[:, 1:]
             },))
+        self._fre_full = [i for i in self._fre_full if i is not None]
         self.fre = round(sum(self._fre_full) / len(self._fre_full), 3)
         self.av_sent_len = round(sum(self._sent_len) / len(self._sent_len), 3)
 
