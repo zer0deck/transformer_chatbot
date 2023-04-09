@@ -5,4 +5,4 @@ Diploma.docx
 test.ipynb
 *.psd
 glove.*
-trained_models/transformer/chief/ckpt-119.data-00000-of-00001
+*.data-00000-of-00001
