@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 import tensorflow as tf
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 from chatbot.preprocessor import Corpus, preprocess_sentence
 
 
@@ -323,7 +324,7 @@ class Transformer():
         self._emotion_classificator.fit(self._data_controller.emo_df, epochs=num_epochs)
         self._emotion_classificator.save('trained_models/emotion_detector', overwrite=True)
 
-    def _train_context(self, num_classes:int = 9, num_epochs: int = 5):
+    def _train_context(self, num_classes:int = 4, num_epochs: int = 5):
         self._context_classificator = tf.keras.Sequential()
         self._context_classificator.add(tf.keras.layers.Embedding(self._data_controller._vocab_size, 200))
         self._context_classificator.add(tf.keras.layers.LSTM(128))
@@ -383,7 +384,7 @@ class Transformer():
         # CHECKPOINT MANAGER:
 
         checkpoint = tf.keras.callbacks.BackupAndRestore(
-            'trained_models/checkpoints',
+            'trained_models/transformer',
             save_freq='epoch',
             delete_checkpoint=False
             )
@@ -400,56 +401,61 @@ class Transformer():
         self.history = self._model.fit(
             self._data_controller.dataset,
             epochs=self.num_epoch,
-            verbose=1,
+            verbose=2,
             callbacks=[checkpoint, stop_early]
             )
         return self.history.history
 
 # pylint: disable = [missing-function-docstring, unexpected-keyword-arg, unsubscriptable-object]
-    def evaluate(self, sentence: str, classificator_path:str = 'trained_models/classificator', emotion_detector_path: str = 'trained_models/emotion_detector'):
+    def evaluate(self, sentence: str, k:int=0, tag: str = None, emote: str = None, classificator_path:str = 'trained_models/classificator', emotion_detector_path: str = 'trained_models/emotion_detector', flag: bool = False):
 
         sentence = tf.expand_dims(self._data_controller._start_token + self._data_controller._tokenizer.encode(sentence) + self._data_controller._end_token, axis=0)
-        if not self._classificators_loaded:
-            self._context_classificator = tf.keras.models.load_model(classificator_path)
-            self._context_classificator.compile(optimizer='adam', loss="categorical_crossentropy", metrics=['AUC', 'Recall', 'Precision', 'accuracy'])
-            self._emotion_classificator = tf.keras.models.load_model(emotion_detector_path)
-            self._emotion_classificator.compile(optimizer='adam', loss="categorical_crossentropy", metrics=['AUC', 'Recall', 'Precision', 'accuracy'])
-        tag = tf.expand_dims(
-            int(list(self._data_controller.cont_encoder.keys())[
-                list(self._data_controller.cont_encoder.values())
-                .index(tf.argmax(
-                        self._context_classificator.predict(
-                            tf.constant(sentence),
-                            verbose=0
-                        ),
-                        axis=1
-                    ).numpy()[0]-1
-                )
-            ]),
-            axis=0
-        )
-        emote = tf.expand_dims(
-            int(list(self._data_controller.emo_encoder.keys())[
-                list(self._data_controller.emo_encoder.values())
-                .index(tf.argmax(
-                        self._context_classificator.predict(
-                            tf.constant(sentence),
-                            verbose=0
-                        ),
-                        axis=1
-                    ).numpy()[0]-1
-                )
-            ]),
-            axis=0
-        )
+        if flag:
+            if not self._classificators_loaded:
+                self._context_classificator = tf.keras.models.load_model(classificator_path)
+                self._context_classificator.compile(optimizer='adam', loss="categorical_crossentropy", metrics=['AUC', 'Recall', 'Precision', 'accuracy'])
+                self._emotion_classificator = tf.keras.models.load_model(emotion_detector_path)
+                self._emotion_classificator.compile(optimizer='adam', loss="categorical_crossentropy", metrics=['AUC', 'Recall', 'Precision', 'accuracy'])
+            tag = tf.expand_dims(
+                int(list(self._data_controller.cont_encoder.keys())[
+                    list(self._data_controller.cont_encoder.values())
+                    .index(tf.argmax(
+                            self._context_classificator.predict(
+                                tf.constant(sentence),
+                                verbose=0
+                            ),
+                            axis=1
+                        ).numpy()[0]
+                    )
+                ]),
+                axis=0
+            )
+            emote = tf.expand_dims(
+                int(list(self._data_controller.emo_encoder.keys())[
+                    list(self._data_controller.emo_encoder.values())
+                    .index(tf.argmax(
+                            self._context_classificator.predict(
+                                tf.constant(sentence),
+                                verbose=0
+                            ),
+                            axis=1
+                        ).numpy()[0]
+                    )
+                ]),
+                axis=0
+            )
+        else:
+            tag = tf.expand_dims([tag], axis=0)
+            emote = tf.expand_dims(self._data_controller._tokenizer.encode(emote), axis=0)
         output = tf.expand_dims(self._data_controller._start_token, 0)
-
         for _ in range(self.max_length):
             predictions = self._model(inputs=[sentence, emote, tag, output], training=False)
 
             # select the last word from the seq_len dimension
             predictions = predictions[:, -1:, :]
-            predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
+            _, indices = tf.nn.top_k(predictions[0][0],k+1)
+            predicted_id = tf.cast([[indices[k]]], tf.int32)
+            # predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
 
             # return the result if the predicted_id is equal to the end token
             if tf.equal(predicted_id, self._data_controller._end_token[0]):
@@ -462,27 +468,48 @@ class Transformer():
         return tf.squeeze(output, axis=0)
 # pylint: enable = [missing-function-docstring, unexpected-keyword-arg, unsubscriptable-object]
 
-    def predict(self, sentence: str):
+    def predict(self, sentence: str, flag=False, tag = None, emote = None):
         """Function to predict sentence
         """
-        prediction = self.evaluate(sentence)
+        predictions = []
+        for i in range(1):
+            predictions.append(self.evaluate(sentence, flag=flag, tag=tag, emote=emote, k=i))
 
-        predicted_sentence = self._data_controller._tokenizer.decode([i for i in prediction if i < self._data_controller._tokenizer.vocab_size])
+        predicted_sentences = [self._data_controller._tokenizer.decode([i for i in prediction if i < self._data_controller._tokenizer.vocab_size]) for prediction in predictions]
 
-        return predicted_sentence
+        return predicted_sentences
 
-    def chat(self):
+    def chat(self, data: pd.DataFrame = pd.DataFrame()) -> None | list[str]:
         """
         Chat conversation init
         """
-        with open('trained_models/emo_encoder.json', 'r', encoding='utf8') as file_object:
-            self._data_controller.emo_encoder = json.load(file_object)
-        with open('trained_models/cont_encoder.json', 'r', encoding='utf8') as file_object:
-            self._data_controller.cont_encoder = json.load(file_object)
-        while True:
-            text = input('Введите текст:')
-            if text == '0':
-                break
-            text = preprocess_sentence(text)
-            print(text)
-            print(self.predict(text))
+        if data.empty:
+            with open('trained_models/emo_encoder.json', 'r', encoding='utf8') as file_object:
+                self._data_controller.emo_encoder = json.load(file_object)
+            with open('trained_models/cont_encoder.json', 'r', encoding='utf8') as file_object:
+                self._data_controller.cont_encoder = json.load(file_object)
+            while True:
+                text = input('Введите текст:')
+                if text == '0':
+                    break
+                text = preprocess_sentence(text)
+                print('You:', text)
+                print('Bot:',self.predict(text, flag=True))
+            return None
+        dec =  {
+            "home living": 4708,
+            "business": 1349,
+            "minorities": 69034,
+            "sports": 7243,
+            "politics": 3406,
+            "wellness": 15507,
+            "entertainment": 11989,
+            "travel": 2010,
+            "culture": 4060
+            }
+        result = []
+        for _, row in tqdm(data.iterrows(), total=len(data)):
+            tag = dec[row['category']]
+            ans = self.predict(row['question'], tag=tag, emote=row['emotion'])
+            result.append(ans)
+        return result

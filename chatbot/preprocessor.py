@@ -168,8 +168,9 @@ class Corpus():
         self._context = [self._preprocess_sentence(sent, False) for sent in self.corpus.iloc[:, 3].to_list()]
         try:
             self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.load_from_file('trained_models/tokenizer.tf')
-        except UnicodeDecodeError:
+        except:
             self._tokenizer = tfds.deprecated.text.SubwordTextEncoder.build_from_corpus(self._questions + self._answers + self._emotions + self._context, target_vocab_size=2**16)
+            self._tokenizer.save_to_file('trained_models/tokenizer.tf')
         self._start_token, self._end_token = [self._tokenizer.vocab_size], [self._tokenizer.vocab_size + 1]
         self._vocab_size = self._tokenizer.vocab_size + 2
         self._tokenize_and_filter()
